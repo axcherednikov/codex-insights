@@ -211,19 +211,20 @@ func runQuick(args []string) {
 		fmt.Printf("%s:\n", tr.T("completed_averages"))
 
 		fmt.Printf(
-			"  %-18s %.0f\n",
+			"  %-22s %.0f\n",
 			tr.T("tokens")+":",
 			float64(totalTokens)/float64(completedCount),
 		)
 
 		fmt.Printf(
-			"  %-18s %.1f sec\n",
+			"  %-22s %.1f %s\n",
 			tr.T("duration")+":",
 			float64(totalDurationMS)/float64(completedCount)/1000,
+			tr.T("seconds_short"),
 		)
 
 		fmt.Printf(
-			"  %-18s %.1f\n",
+			"  %-22s %.1f\n",
 			tr.T("tool_calls")+":",
 			float64(totalToolCalls)/float64(completedCount),
 		)
