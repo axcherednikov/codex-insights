@@ -219,6 +219,25 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
+	if tr.Language == i18n.Russian {
+		fmt.Println("Анализируем недостающие проверки...")
+	} else {
+		fmt.Println("Running validation gap analysis...")
+	}
+
+	validationAnalyzer, err := analyze.NewValidationAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
+
+	validationAnalysis, err := validationAnalyzer.Analyze(
+		followups,
+		preventionAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
 	behaviorCounts := map[string]int{}
 
 	for _, result := range steeringAnalysis.Results {
@@ -234,57 +253,77 @@ func runAnalyze(args []string) {
 	fmt.Printf("%s:\n", tr.T("judge"))
 
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("steering_cache_hits")+":",
 		steeringAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("steering_new")+":",
 		steeringAnalysis.Evaluated,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("task_type_cache_hits")+":",
 		taskTypeAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("task_type_new")+":",
 		taskTypeAnalysis.Evaluated,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("reason_cache_hits")+":",
 		reasonAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("reason_new")+":",
 		reasonAnalysis.Evaluated,
 	)
 
 	if tr.Language == i18n.Russian {
 		fmt.Printf(
-			"  %-34s %d\n",
+			"  %-36s %d\n",
 			"Способов предотвращения из кеша:",
 			preventionAnalysis.CacheHits,
 		)
 		fmt.Printf(
-			"  %-34s %d\n",
+			"  %-36s %d\n",
 			"Новых оценок предотвращения:",
 			preventionAnalysis.Evaluated,
 		)
+		fmt.Printf(
+			"  %-36s %d\n",
+			"Проверок из кеша:",
+			validationAnalysis.CacheHits,
+		)
+		fmt.Printf(
+			"  %-36s %d\n",
+			"Новых оценок проверок:",
+			validationAnalysis.Evaluated,
+		)
 	} else {
 		fmt.Printf(
-			"  %-34s %d\n",
+			"  %-36s %d\n",
 			"Prevention cache hits:",
 			preventionAnalysis.CacheHits,
 		)
 		fmt.Printf(
-			"  %-34s %d\n",
+			"  %-36s %d\n",
 			"Prevention newly evaluated:",
 			preventionAnalysis.Evaluated,
+		)
+		fmt.Printf(
+			"  %-36s %d\n",
+			"Validation cache hits:",
+			validationAnalysis.CacheHits,
+		)
+		fmt.Printf(
+			"  %-36s %d\n",
+			"Validation newly evaluated:",
+			validationAnalysis.Evaluated,
 		)
 	}
 
@@ -292,34 +331,35 @@ func runAnalyze(args []string) {
 	fmt.Printf("%s:\n", tr.T("behavior"))
 
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("analyzed")+":",
 		len(steeringAnalysis.Results),
 	)
 	fmt.Printf(
-		"  %-34s %d (%.1f%%)\n",
+		"  %-36s %d (%.1f%%)\n",
 		tr.T("steering")+":",
 		steeringCount,
 		steeringRate,
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("continuation")+":",
 		behaviorCounts["continuation"],
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("questions")+":",
 		behaviorCounts["question"],
 	)
 	fmt.Printf(
-		"  %-34s %d\n",
+		"  %-36s %d\n",
 		tr.T("user_correction")+":",
 		behaviorCounts["user_correction"],
 	)
 
 	printSteeringReasons(tr, reasonAnalysis.Results)
 	printPrevention(tr, preventionAnalysis.Results)
+	printValidation(tr, validationAnalysis.Results)
 	printTaskTypes(tr, taskTypeAnalysis.Results)
 
 	printSteeringByTaskType(
