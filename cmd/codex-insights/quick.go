@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"codex-insights/internal/i18n"
 	"codex-insights/internal/sessions"
 )
 
@@ -24,11 +25,9 @@ func runQuick(args []string) {
 
 	fs := flag.NewFlagSet("quick", flag.ExitOnError)
 
-	defaultSessions := filepath.Join(home, ".codex", "sessions")
-
 	sessionsPath := fs.String(
 		"sessions",
-		defaultSessions,
+		filepath.Join(home, ".codex", "sessions"),
 		"path to Codex sessions",
 	)
 
@@ -44,6 +43,12 @@ func runQuick(args []string) {
 		"analyze state before this RFC3339 timestamp",
 	)
 
+	lang := fs.String(
+		"lang",
+		"auto",
+		"report language: auto, en, ru",
+	)
+
 	legacyExcludeOriginator := fs.String(
 		"legacy-exclude-originator",
 		"",
@@ -51,6 +56,11 @@ func runQuick(args []string) {
 	)
 
 	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+
+	tr, err := i18n.New(*lang)
+	if err != nil {
 		fatal(err)
 	}
 
@@ -164,21 +174,23 @@ func runQuick(args []string) {
 		}
 	}
 
-	fmt.Println("Codex Insights Quick")
+	fmt.Println(tr.T("quick_title"))
 	fmt.Println("====================")
 
+	fmt.Printf("%s: ", tr.T("period"))
+
 	if *days == 0 {
-		fmt.Print("Period: all history")
+		fmt.Print(tr.T("all_history"))
 	} else {
-		fmt.Printf("Period: last %d days", *days)
+		fmt.Printf(tr.T("last_days"), *days)
 	}
 
-	fmt.Printf(" until %s\n", before.Format(time.RFC3339))
-	fmt.Printf("User sessions: %d\n", sessionCount)
-	fmt.Printf("Tasks: %d\n", turnCount)
+	fmt.Printf(" — %s\n", before.Format(time.RFC3339))
+	fmt.Printf("%s: %d\n", tr.T("user_sessions"), sessionCount)
+	fmt.Printf("%s: %d\n", tr.T("tasks"), turnCount)
 
 	fmt.Println()
-	fmt.Println("Status:")
+	fmt.Printf("%s:\n", tr.T("status"))
 
 	for _, status := range []string{
 		"complete",
@@ -186,26 +198,33 @@ func runQuick(args []string) {
 		"incomplete",
 	} {
 		if count := statusCounts[status]; count > 0 {
-			fmt.Printf("  %-10s %d\n", status, count)
+			fmt.Printf(
+				"  %-16s %d\n",
+				tr.T(status),
+				count,
+			)
 		}
 	}
 
 	if completedCount > 0 {
 		fmt.Println()
-		fmt.Println("Completed task averages:")
+		fmt.Printf("%s:\n", tr.T("completed_averages"))
 
 		fmt.Printf(
-			"  Tokens:     %.0f\n",
+			"  %-18s %.0f\n",
+			tr.T("tokens")+":",
 			float64(totalTokens)/float64(completedCount),
 		)
 
 		fmt.Printf(
-			"  Duration:   %.1f sec\n",
+			"  %-18s %.1f sec\n",
+			tr.T("duration")+":",
 			float64(totalDurationMS)/float64(completedCount)/1000,
 		)
 
 		fmt.Printf(
-			"  Tool calls: %.1f\n",
+			"  %-18s %.1f\n",
+			tr.T("tool_calls")+":",
 			float64(totalToolCalls)/float64(completedCount),
 		)
 	}
@@ -224,7 +243,7 @@ func runQuick(args []string) {
 	})
 
 	fmt.Println()
-	fmt.Println("Model + reasoning:")
+	fmt.Printf("%s:\n", tr.T("model_reasoning"))
 
 	for _, stat := range stats {
 		fmt.Printf("  %4d  %s\n", stat.Count, stat.Key)
@@ -232,19 +251,24 @@ func runQuick(args []string) {
 
 	fmt.Println()
 	fmt.Printf(
-		"Auto-excluded Codex Insights judge sessions: %d\n",
+		"%s: %d\n",
+		tr.T("auto_excluded_judges"),
 		excludedJudgeSessions,
 	)
 
 	if *legacyExcludeOriginator != "" {
 		fmt.Printf(
-			"Legacy-excluded %s sessions: %d\n",
+			tr.T("legacy_excluded")+": %d\n",
 			*legacyExcludeOriginator,
 			legacyExcludedSessions,
 		)
 	}
 
 	if readErrors > 0 {
-		fmt.Printf("Read errors: %d\n", readErrors)
+		fmt.Printf(
+			"%s: %d\n",
+			tr.T("read_errors"),
+			readErrors,
+		)
 	}
 }
