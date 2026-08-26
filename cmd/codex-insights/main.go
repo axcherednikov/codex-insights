@@ -1,0 +1,226 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"codex-insights/internal/sessions"
+)
+
+type modelStat struct {
+	Key   string
+	Count int
+}
+
+func main() {
+	if len(os.Args) < 2 || os.Args[1] != "quick" {
+		fmt.Println("Usage:")
+		fmt.Println("  codex-insights quick [options]")
+		os.Exit(0)
+	}
+
+	runQuick(os.Args[2:])
+}
+
+func runQuick(args []string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fatal(err)
+	}
+
+	fs := flag.NewFlagSet("quick", flag.ExitOnError)
+
+	defaultSessions := filepath.Join(home, ".codex", "sessions")
+
+	sessionsPath := fs.String(
+		"sessions",
+		defaultSessions,
+		"path to Codex sessions",
+	)
+
+	days := fs.Int(
+		"days",
+		30,
+		"number of days to analyze; 0 means all history",
+	)
+
+	beforeRaw := fs.String(
+		"before",
+		"",
+		"analyze state before this RFC3339 timestamp",
+	)
+
+	excludeOriginator := fs.String(
+		"exclude-originator",
+		"",
+		"temporarily exclude an originator such as codex_exec",
+	)
+
+	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+
+	before := time.Now().UTC()
+
+	if *beforeRaw != "" {
+		parsed, err := time.Parse(time.RFC3339, *beforeRaw)
+		if err != nil {
+			fatal(fmt.Errorf("invalid --before: %w", err))
+		}
+		before = parsed
+	}
+
+	var since time.Time
+	if *days > 0 {
+		since = before.Add(-time.Duration(*days) * 24 * time.Hour)
+	}
+
+	files, err := sessions.FindRollouts(*sessionsPath)
+	if err != nil {
+		fatal(err)
+	}
+
+	statusCounts := map[string]int{}
+	modelCounts := map[string]int{}
+
+	var (
+		sessionCount     int
+		turnCount        int
+		completedCount   int
+		totalTokens      int64
+		totalDurationMS  int64
+		totalToolCalls   int64
+		readErrors       int
+		excludedSessions int
+	)
+
+	for _, file := range files {
+		meta, err := sessions.ReadMeta(file)
+		if err != nil {
+			readErrors++
+			continue
+		}
+
+		if meta.ThreadSource != "user" {
+			continue
+		}
+
+		if *excludeOriginator != "" && meta.Originator == *excludeOriginator {
+			excludedSessions++
+			continue
+		}
+
+		turns, err := sessions.ParseTurns(file, before)
+		if err != nil {
+			readErrors++
+			continue
+		}
+
+		sessionHasTurns := false
+
+		for _, turn := range turns {
+			startedAt, err := time.Parse(time.RFC3339Nano, turn.StartedAt)
+			if err != nil {
+				continue
+			}
+
+			if startedAt.After(before) {
+				continue
+			}
+
+			if !since.IsZero() && startedAt.Before(since) {
+				continue
+			}
+
+			sessionHasTurns = true
+			turnCount++
+			statusCounts[turn.Status]++
+
+			modelKey := turn.Model + "\t" + turn.Effort
+			modelCounts[modelKey]++
+
+			if turn.Status == "complete" {
+				completedCount++
+				totalTokens += turn.Tokens
+				totalDurationMS += turn.DurationMS
+				totalToolCalls += int64(turn.ToolCalls)
+			}
+		}
+
+		if sessionHasTurns {
+			sessionCount++
+		}
+	}
+
+	fmt.Println("Codex Insights Quick")
+	fmt.Println("====================")
+
+	if *days == 0 {
+		fmt.Printf("Period: all history")
+	} else {
+		fmt.Printf("Period: last %d days", *days)
+	}
+
+	fmt.Printf(" until %s\n", before.Format(time.RFC3339))
+	fmt.Printf("User sessions: %d\n", sessionCount)
+	fmt.Printf("Tasks: %d\n", turnCount)
+
+	fmt.Println()
+	fmt.Println("Status:")
+
+	for _, status := range []string{"complete", "aborted", "incomplete"} {
+		if count := statusCounts[status]; count > 0 {
+			fmt.Printf("  %-10s %d\n", status, count)
+		}
+	}
+
+	if completedCount > 0 {
+		fmt.Println()
+		fmt.Println("Completed task averages:")
+		fmt.Printf("  Tokens:     %.0f\n", float64(totalTokens)/float64(completedCount))
+		fmt.Printf("  Duration:   %.1f sec\n", float64(totalDurationMS)/float64(completedCount)/1000)
+		fmt.Printf("  Tool calls: %.1f\n", float64(totalToolCalls)/float64(completedCount))
+	}
+
+	stats := make([]modelStat, 0, len(modelCounts))
+
+	for key, count := range modelCounts {
+		stats = append(stats, modelStat{
+			Key:   key,
+			Count: count,
+		})
+	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Count > stats[j].Count
+	})
+
+	fmt.Println()
+	fmt.Println("Model + reasoning:")
+
+	for _, stat := range stats {
+		fmt.Printf("  %4d  %s\n", stat.Count, stat.Key)
+	}
+
+	if *excludeOriginator != "" {
+		fmt.Println()
+		fmt.Printf(
+			"Excluded %s sessions: %d\n",
+			*excludeOriginator,
+			excludedSessions,
+		)
+	}
+
+	if readErrors > 0 {
+		fmt.Printf("Read errors: %d\n", readErrors)
+	}
+}
+
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, "error:", err)
+	os.Exit(1)
+}
