@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"codex-insights/internal/analyze"
+	"codex-insights/internal/i18n"
 	"codex-insights/internal/sessions"
 )
 
@@ -49,6 +50,12 @@ func runAnalyze(args []string) {
 		"analyze state before this RFC3339 timestamp",
 	)
 
+	lang := fs.String(
+		"lang",
+		"auto",
+		"report language: auto, en, ru",
+	)
+
 	legacyExcludeOriginator := fs.String(
 		"legacy-exclude-originator",
 		"",
@@ -56,6 +63,11 @@ func runAnalyze(args []string) {
 	)
 
 	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+
+	tr, err := i18n.New(*lang)
+	if err != nil {
 		fatal(err)
 	}
 
@@ -126,10 +138,7 @@ func runAnalyze(args []string) {
 
 		userSessions++
 
-		allInteractions = append(
-			allInteractions,
-			filtered...,
-		)
+		allInteractions = append(allInteractions, filtered...)
 
 		followups = append(
 			followups,
@@ -137,23 +146,24 @@ func runAnalyze(args []string) {
 		)
 	}
 
-	fmt.Println("Codex Insights Analyze")
+	fmt.Println(tr.T("analyze_title"))
 	fmt.Println("======================")
-	fmt.Printf("User sessions: %d\n", userSessions)
-	fmt.Printf("Tasks: %d\n", len(allInteractions))
-	fmt.Printf("Follow-up pairs: %d\n", len(followups))
+	fmt.Printf("%s: %d\n", tr.T("user_sessions"), userSessions)
+	fmt.Printf("%s: %d\n", tr.T("tasks"), len(allInteractions))
+	fmt.Printf("%s: %d\n", tr.T("followup_pairs"), len(followups))
 	fmt.Printf(
-		"Auto-excluded judge sessions: %d\n",
+		"%s: %d\n",
+		tr.T("auto_excluded_judges"),
 		excludedJudgeSessions,
 	)
 
 	if len(followups) == 0 {
-		fmt.Println("Nothing to analyze.")
+		fmt.Println(tr.T("nothing_to_analyze"))
 		return
 	}
 
 	fmt.Println()
-	fmt.Println("Running steering analysis...")
+	fmt.Println(tr.T("running_steering"))
 
 	steeringAnalyzer, err := analyze.NewSteeringAnalyzer()
 	if err != nil {
@@ -165,7 +175,7 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
-	fmt.Println("Running task type analysis...")
+	fmt.Println(tr.T("running_task_types"))
 
 	taskTypeAnalyzer, err := analyze.NewTaskTypeAnalyzer()
 	if err != nil {
@@ -177,7 +187,7 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
-	fmt.Println("Running steering reason analysis...")
+	fmt.Println(tr.T("running_reasons"))
 
 	reasonAnalyzer, err := analyze.NewSteeringReasonAnalyzer()
 	if err != nil {
@@ -204,65 +214,74 @@ func runAnalyze(args []string) {
 		float64(len(steeringAnalysis.Results))
 
 	fmt.Println()
-	fmt.Println("Judge:")
+	fmt.Printf("%s:\n", tr.T("judge"))
 
 	fmt.Printf(
-		"  Steering cache hits:        %d\n",
+		"  %-30s %d\n",
+		tr.T("steering_cache_hits")+":",
 		steeringAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  Steering newly evaluated:   %d\n",
+		"  %-30s %d\n",
+		tr.T("steering_new")+":",
 		steeringAnalysis.Evaluated,
 	)
-
 	fmt.Printf(
-		"  Task type cache hits:       %d\n",
+		"  %-30s %d\n",
+		tr.T("task_type_cache_hits")+":",
 		taskTypeAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  Task types newly evaluated: %d\n",
+		"  %-30s %d\n",
+		tr.T("task_type_new")+":",
 		taskTypeAnalysis.Evaluated,
 	)
-
 	fmt.Printf(
-		"  Reason cache hits:          %d\n",
+		"  %-30s %d\n",
+		tr.T("reason_cache_hits")+":",
 		reasonAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  Reasons newly evaluated:    %d\n",
+		"  %-30s %d\n",
+		tr.T("reason_new")+":",
 		reasonAnalysis.Evaluated,
 	)
 
 	fmt.Println()
-	fmt.Println("Behavior:")
+	fmt.Printf("%s:\n", tr.T("behavior"))
 
 	fmt.Printf(
-		"  Analyzed:        %d\n",
+		"  %-30s %d\n",
+		tr.T("analyzed")+":",
 		len(steeringAnalysis.Results),
 	)
 	fmt.Printf(
-		"  Steering:        %d (%.1f%%)\n",
+		"  %-30s %d (%.1f%%)\n",
+		tr.T("steering")+":",
 		steeringCount,
 		steeringRate,
 	)
 	fmt.Printf(
-		"  Continuation:    %d\n",
+		"  %-30s %d\n",
+		tr.T("continuation")+":",
 		behaviorCounts["continuation"],
 	)
 	fmt.Printf(
-		"  Questions:       %d\n",
+		"  %-30s %d\n",
+		tr.T("questions")+":",
 		behaviorCounts["question"],
 	)
 	fmt.Printf(
-		"  User correction: %d\n",
+		"  %-30s %d\n",
+		tr.T("user_correction")+":",
 		behaviorCounts["user_correction"],
 	)
 
-	printSteeringReasons(reasonAnalysis.Results)
-
-	printTaskTypes(taskTypeAnalysis.Results)
+	printSteeringReasons(tr, reasonAnalysis.Results)
+	printTaskTypes(tr, taskTypeAnalysis.Results)
 
 	printSteeringByTaskType(
+		tr,
 		followups,
 		steeringAnalysis.Results,
 		taskTypeAnalysis.Results,
@@ -270,6 +289,7 @@ func runAnalyze(args []string) {
 }
 
 func printSteeringReasons(
+	tr i18n.Translator,
 	results []analyze.SteeringReasonResult,
 ) {
 	if len(results) == 0 {
@@ -296,7 +316,7 @@ func printSteeringReasons(
 	})
 
 	fmt.Println()
-	fmt.Println("Steering reasons:")
+	fmt.Printf("%s:\n", tr.T("steering_reasons"))
 
 	for _, stat := range stats {
 		rate := 100 *
@@ -304,15 +324,18 @@ func printSteeringReasons(
 			float64(len(results))
 
 		fmt.Printf(
-			"  %-24s %4d  %5.1f%%\n",
-			stat.Name,
+			"  %-34s %4d  %5.1f%%\n",
+			tr.SteeringReason(stat.Name),
 			stat.Count,
 			rate,
 		)
 	}
 }
 
-func printTaskTypes(results []analyze.TaskTypeResult) {
+func printTaskTypes(
+	tr i18n.Translator,
+	results []analyze.TaskTypeResult,
+) {
 	counts := map[string]int{}
 
 	for _, result := range results {
@@ -333,18 +356,19 @@ func printTaskTypes(results []analyze.TaskTypeResult) {
 	})
 
 	fmt.Println()
-	fmt.Println("Task types:")
+	fmt.Printf("%s:\n", tr.T("task_types"))
 
 	for _, stat := range stats {
 		fmt.Printf(
-			"  %-15s %d\n",
-			stat.Type,
+			"  %-28s %d\n",
+			tr.TaskType(stat.Type),
 			stat.Followups,
 		)
 	}
 }
 
 func printSteeringByTaskType(
+	tr i18n.Translator,
 	followups []sessions.Followup,
 	steeringResults []analyze.SteeringResult,
 	taskTypes []analyze.TaskTypeResult,
@@ -408,7 +432,7 @@ func printSteeringByTaskType(
 	})
 
 	fmt.Println()
-	fmt.Println("Steering by task type:")
+	fmt.Printf("%s:\n", tr.T("steering_by_task_type"))
 
 	for _, stat := range stats {
 		rate := 100 *
@@ -416,9 +440,10 @@ func printSteeringByTaskType(
 			float64(stat.Followups)
 
 		fmt.Printf(
-			"  %-15s %4d follow-ups  %4d steering  %5.1f%%\n",
-			stat.Type,
+			"  %-28s %4d %s  %4d  %5.1f%%\n",
+			tr.TaskType(stat.Type),
 			stat.Followups,
+			tr.T("followups"),
 			stat.Steering,
 			rate,
 		)

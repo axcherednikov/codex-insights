@@ -66,11 +66,13 @@ func (t Translator) T(key string) string {
 }
 
 func (t Translator) TaskType(value string) string {
-	if t.Language != Russian {
-		return value
+	if t.Language == Russian {
+		if translated, ok := russianTaskTypes[value]; ok {
+			return translated
+		}
 	}
 
-	if translated, ok := russianTaskTypes[value]; ok {
+	if translated, ok := englishTaskTypes[value]; ok {
 		return translated
 	}
 
@@ -78,11 +80,13 @@ func (t Translator) TaskType(value string) string {
 }
 
 func (t Translator) SteeringReason(value string) string {
-	if t.Language != Russian {
-		return value
+	if t.Language == Russian {
+		if translated, ok := russianSteeringReasons[value]; ok {
+			return translated
+		}
 	}
 
-	if translated, ok := russianSteeringReasons[value]; ok {
+	if translated, ok := englishSteeringReasons[value]; ok {
 		return translated
 	}
 
@@ -179,26 +183,50 @@ var russian = map[string]string{
 	"nothing_to_analyze":    "Нет данных для анализа.",
 }
 
-var russianTaskTypes = map[string]string{
-	"bugfix":        "исправление ошибок",
-	"feature":       "новая функциональность",
-	"refactor":      "рефакторинг",
-	"tests":         "тесты",
-	"code_review":   "ревью кода",
-	"architecture":  "архитектура",
+var englishTaskTypes = map[string]string{
+	"bugfix":        "Bug fix",
+	"feature":       "Feature",
+	"refactor":      "Refactoring",
+	"tests":         "Tests",
+	"code_review":   "Code review",
+	"architecture":  "Architecture",
 	"devops":        "DevOps",
-	"research":      "исследование",
-	"documentation": "документация",
-	"other":         "другое",
+	"research":      "Research",
+	"documentation": "Documentation",
+	"other":         "Other",
+}
+
+var russianTaskTypes = map[string]string{
+	"bugfix":        "Исправление ошибок",
+	"feature":       "Новая функциональность",
+	"refactor":      "Рефакторинг",
+	"tests":         "Тесты",
+	"code_review":   "Ревью кода",
+	"architecture":  "Архитектура",
+	"devops":        "DevOps",
+	"research":      "Исследование",
+	"documentation": "Документация",
+	"other":         "Другое",
+}
+
+var englishSteeringReasons = map[string]string{
+	"misunderstood_request":   "Misunderstood request",
+	"implementation_error":    "Implementation error",
+	"insufficient_validation": "Insufficient validation",
+	"architecture_mismatch":   "Architecture mismatch",
+	"overengineering":         "Overengineering",
+	"wrong_output_format":     "Wrong output format",
+	"ignored_constraints":     "Ignored constraints",
+	"other":                   "Other",
 }
 
 var russianSteeringReasons = map[string]string{
-	"misunderstood_request":   "неверно понята задача",
-	"implementation_error":    "ошибка реализации",
-	"insufficient_validation": "недостаточная проверка результата",
-	"architecture_mismatch":   "несоответствие архитектуре",
-	"overengineering":         "переусложнение решения",
-	"wrong_output_format":     "неверный формат результата",
-	"ignored_constraints":     "проигнорированы ограничения",
-	"other":                   "другое",
+	"misunderstood_request":   "Неверно понята задача",
+	"implementation_error":    "Ошибка реализации",
+	"insufficient_validation": "Недостаточная проверка результата",
+	"architecture_mismatch":   "Несоответствие архитектуре",
+	"overengineering":         "Переусложнение решения",
+	"wrong_output_format":     "Неверный формат результата",
+	"ignored_constraints":     "Проигнорированы ограничения",
+	"other":                   "Другое",
 }
