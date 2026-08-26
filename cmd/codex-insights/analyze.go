@@ -18,6 +18,11 @@ type taskBehaviorStat struct {
 	Steering  int
 }
 
+type namedCount struct {
+	Name  string
+	Count int
+}
+
 func runAnalyze(args []string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -172,6 +177,21 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
+	fmt.Println("Running steering reason analysis...")
+
+	reasonAnalyzer, err := analyze.NewSteeringReasonAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
+
+	reasonAnalysis, err := reasonAnalyzer.Analyze(
+		followups,
+		steeringAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
 	behaviorCounts := map[string]int{}
 
 	for _, result := range steeringAnalysis.Results {
@@ -185,16 +205,18 @@ func runAnalyze(args []string) {
 
 	fmt.Println()
 	fmt.Println("Judge:")
+
 	fmt.Printf(
-		"  Steering cache hits:      %d\n",
+		"  Steering cache hits:        %d\n",
 		steeringAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  Steering newly evaluated: %d\n",
+		"  Steering newly evaluated:   %d\n",
 		steeringAnalysis.Evaluated,
 	)
+
 	fmt.Printf(
-		"  Task type cache hits:     %d\n",
+		"  Task type cache hits:       %d\n",
 		taskTypeAnalysis.CacheHits,
 	)
 	fmt.Printf(
@@ -202,8 +224,18 @@ func runAnalyze(args []string) {
 		taskTypeAnalysis.Evaluated,
 	)
 
+	fmt.Printf(
+		"  Reason cache hits:          %d\n",
+		reasonAnalysis.CacheHits,
+	)
+	fmt.Printf(
+		"  Reasons newly evaluated:    %d\n",
+		reasonAnalysis.Evaluated,
+	)
+
 	fmt.Println()
 	fmt.Println("Behavior:")
+
 	fmt.Printf(
 		"  Analyzed:        %d\n",
 		len(steeringAnalysis.Results),
@@ -226,6 +258,8 @@ func runAnalyze(args []string) {
 		behaviorCounts["user_correction"],
 	)
 
+	printSteeringReasons(reasonAnalysis.Results)
+
 	printTaskTypes(taskTypeAnalysis.Results)
 
 	printSteeringByTaskType(
@@ -233,6 +267,49 @@ func runAnalyze(args []string) {
 		steeringAnalysis.Results,
 		taskTypeAnalysis.Results,
 	)
+}
+
+func printSteeringReasons(
+	results []analyze.SteeringReasonResult,
+) {
+	if len(results) == 0 {
+		return
+	}
+
+	counts := map[string]int{}
+
+	for _, result := range results {
+		counts[result.Reason]++
+	}
+
+	stats := make([]namedCount, 0, len(counts))
+
+	for name, count := range counts {
+		stats = append(stats, namedCount{
+			Name:  name,
+			Count: count,
+		})
+	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Count > stats[j].Count
+	})
+
+	fmt.Println()
+	fmt.Println("Steering reasons:")
+
+	for _, stat := range stats {
+		rate := 100 *
+			float64(stat.Count) /
+			float64(len(results))
+
+		fmt.Printf(
+			"  %-24s %4d  %5.1f%%\n",
+			stat.Name,
+			stat.Count,
+			rate,
+		)
+	}
 }
 
 func printTaskTypes(results []analyze.TaskTypeResult) {
