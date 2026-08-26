@@ -112,6 +112,7 @@ func runAnalyze(args []string) {
 		}
 
 		userSessions++
+
 		followups = append(
 			followups,
 			sessions.BuildFollowups(filtered)...,
@@ -135,25 +136,33 @@ func runAnalyze(args []string) {
 	fmt.Println()
 	fmt.Println("Running steering analysis...")
 
-	analyzer := analyze.NewSteeringAnalyzer()
+	analyzer, err := analyze.NewSteeringAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
 
-	results, err := analyzer.Analyze(followups)
+	analysis, err := analyzer.Analyze(followups)
 	if err != nil {
 		fatal(err)
 	}
 
 	counts := map[string]int{}
 
-	for _, result := range results {
+	for _, result := range analysis.Results {
 		counts[result.Label]++
 	}
 
 	steering := counts["steering"]
-	rate := 100 * float64(steering) / float64(len(results))
+	rate := 100 * float64(steering) / float64(len(analysis.Results))
+
+	fmt.Println()
+	fmt.Println("Judge:")
+	fmt.Printf("  Cache hits:      %d\n", analysis.CacheHits)
+	fmt.Printf("  Newly evaluated: %d\n", analysis.Evaluated)
 
 	fmt.Println()
 	fmt.Println("Behavior:")
-	fmt.Printf("  Analyzed:        %d\n", len(results))
+	fmt.Printf("  Analyzed:        %d\n", len(analysis.Results))
 	fmt.Printf("  Steering:        %d (%.1f%%)\n", steering, rate)
 	fmt.Printf("  Continuation:    %d\n", counts["continuation"])
 	fmt.Printf("  Questions:       %d\n", counts["question"])

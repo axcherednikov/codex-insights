@@ -1,17 +1,28 @@
 package analyze
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	analysiscache "codex-insights/internal/cache"
 	"codex-insights/internal/judge"
 	"codex-insights/internal/sessions"
 )
+
+const steeringCacheVersion = "steering-v1"
 
 type SteeringResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
 	Label          string  `json:"label"`
 	Confidence     float64 `json:"confidence"`
+}
+
+type SteeringAnalysis struct {
+	Results   []SteeringResult
+	CacheHits int
+	Evaluated int
 }
 
 type steeringResponse struct {
@@ -20,32 +31,63 @@ type steeringResponse struct {
 
 type SteeringAnalyzer struct {
 	runner    judge.Runner
+	cache     *analysiscache.Store
 	batchSize int
 }
 
-func NewSteeringAnalyzer() SteeringAnalyzer {
+func NewSteeringAnalyzer() (SteeringAnalyzer, error) {
+	store, err := analysiscache.NewDefault()
+	if err != nil {
+		return SteeringAnalyzer{}, err
+	}
+
 	return SteeringAnalyzer{
 		runner:    judge.New(),
+		cache:     store,
 		batchSize: 25,
-	}
+	}, nil
 }
 
 func (a SteeringAnalyzer) Analyze(
 	followups []sessions.Followup,
-) ([]SteeringResult, error) {
-	var results []SteeringResult
+) (SteeringAnalysis, error) {
+	analysis := SteeringAnalysis{
+		Results: make([]SteeringResult, 0, len(followups)),
+	}
 
-	for start := 0; start < len(followups); start += a.batchSize {
-		end := start + a.batchSize
-		if end > len(followups) {
-			end = len(followups)
+	resultsByTurn := make(
+		map[string]SteeringResult,
+		len(followups),
+	)
+
+	pending := make([]sessions.Followup, 0, len(followups))
+
+	for _, followup := range followups {
+		var cached SteeringResult
+
+		if a.cache != nil &&
+			a.cache.Get(steeringCacheKey(followup), &cached) &&
+			cached.PreviousTurnID == followup.PreviousTurnID {
+
+			resultsByTurn[followup.PreviousTurnID] = cached
+			analysis.CacheHits++
+			continue
 		}
 
-		batch := followups[start:end]
+		pending = append(pending, followup)
+	}
+
+	for start := 0; start < len(pending); start += a.batchSize {
+		end := start + a.batchSize
+		if end > len(pending) {
+			end = len(pending)
+		}
+
+		batch := pending[start:end]
 
 		batchResults, err := a.analyzeBatch(batch)
 		if err != nil {
-			return nil, fmt.Errorf(
+			return SteeringAnalysis{}, fmt.Errorf(
 				"analyze follow-up batch %d-%d: %w",
 				start,
 				end,
@@ -53,10 +95,46 @@ func (a SteeringAnalyzer) Analyze(
 			)
 		}
 
-		results = append(results, batchResults...)
+		analysis.Evaluated += len(batch)
+
+		for _, result := range batchResults {
+			resultsByTurn[result.PreviousTurnID] = result
+		}
+
+		if a.cache != nil {
+			for _, followup := range batch {
+				result, ok := resultsByTurn[followup.PreviousTurnID]
+				if !ok {
+					continue
+				}
+
+				if err := a.cache.Set(
+					steeringCacheKey(followup),
+					result,
+				); err != nil {
+					return SteeringAnalysis{}, err
+				}
+			}
+
+			if err := a.cache.Save(); err != nil {
+				return SteeringAnalysis{}, err
+			}
+		}
 	}
 
-	return results, nil
+	for _, followup := range followups {
+		result, ok := resultsByTurn[followup.PreviousTurnID]
+		if !ok {
+			return SteeringAnalysis{}, fmt.Errorf(
+				"missing steering result for turn %q",
+				followup.PreviousTurnID,
+			)
+		}
+
+		analysis.Results = append(analysis.Results, result)
+	}
+
+	return analysis, nil
 }
 
 func (a SteeringAnalyzer) analyzeBatch(
@@ -108,7 +186,10 @@ Records:
 		return nil, err
 	}
 
-	if err := validateSteeringResults(followups, response.Results); err != nil {
+	if err := validateSteeringResults(
+		followups,
+		response.Results,
+	); err != nil {
 		return nil, err
 	}
 
@@ -154,6 +235,20 @@ func validateSteeringResults(
 	}
 
 	return nil
+}
+
+func steeringCacheKey(followup sessions.Followup) string {
+	hash := sha256.New()
+
+	hash.Write([]byte(steeringCacheVersion))
+	hash.Write([]byte{0})
+	hash.Write([]byte(followup.PreviousTurnID))
+	hash.Write([]byte{0})
+	hash.Write([]byte(followup.PreviousAnswer))
+	hash.Write([]byte{0})
+	hash.Write([]byte(followup.Prompt))
+
+	return "steering:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func steeringSchema() map[string]any {
