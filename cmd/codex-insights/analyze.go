@@ -137,9 +137,7 @@ func runAnalyze(args []string) {
 		}
 
 		userSessions++
-
 		allInteractions = append(allInteractions, filtered...)
-
 		followups = append(
 			followups,
 			sessions.BuildFollowups(filtered)...,
@@ -202,6 +200,25 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
+	if tr.Language == i18n.Russian {
+		fmt.Println("Анализируем способы снижения корректировок...")
+	} else {
+		fmt.Println("Running prevention analysis...")
+	}
+
+	preventionAnalyzer, err := analyze.NewPreventionAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
+
+	preventionAnalysis, err := preventionAnalyzer.Analyze(
+		followups,
+		steeringAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
 	behaviorCounts := map[string]int{}
 
 	for _, result := range steeringAnalysis.Results {
@@ -217,67 +234,92 @@ func runAnalyze(args []string) {
 	fmt.Printf("%s:\n", tr.T("judge"))
 
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("steering_cache_hits")+":",
 		steeringAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("steering_new")+":",
 		steeringAnalysis.Evaluated,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("task_type_cache_hits")+":",
 		taskTypeAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("task_type_new")+":",
 		taskTypeAnalysis.Evaluated,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("reason_cache_hits")+":",
 		reasonAnalysis.CacheHits,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("reason_new")+":",
 		reasonAnalysis.Evaluated,
 	)
+
+	if tr.Language == i18n.Russian {
+		fmt.Printf(
+			"  %-34s %d\n",
+			"Способов предотвращения из кеша:",
+			preventionAnalysis.CacheHits,
+		)
+		fmt.Printf(
+			"  %-34s %d\n",
+			"Новых оценок предотвращения:",
+			preventionAnalysis.Evaluated,
+		)
+	} else {
+		fmt.Printf(
+			"  %-34s %d\n",
+			"Prevention cache hits:",
+			preventionAnalysis.CacheHits,
+		)
+		fmt.Printf(
+			"  %-34s %d\n",
+			"Prevention newly evaluated:",
+			preventionAnalysis.Evaluated,
+		)
+	}
 
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("behavior"))
 
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("analyzed")+":",
 		len(steeringAnalysis.Results),
 	)
 	fmt.Printf(
-		"  %-30s %d (%.1f%%)\n",
+		"  %-34s %d (%.1f%%)\n",
 		tr.T("steering")+":",
 		steeringCount,
 		steeringRate,
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("continuation")+":",
 		behaviorCounts["continuation"],
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("questions")+":",
 		behaviorCounts["question"],
 	)
 	fmt.Printf(
-		"  %-30s %d\n",
+		"  %-34s %d\n",
 		tr.T("user_correction")+":",
 		behaviorCounts["user_correction"],
 	)
 
 	printSteeringReasons(tr, reasonAnalysis.Results)
+	printPrevention(tr, preventionAnalysis.Results)
 	printTaskTypes(tr, taskTypeAnalysis.Results)
 
 	printSteeringByTaskType(
