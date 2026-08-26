@@ -54,10 +54,10 @@ func runQuick(args []string) {
 		"analyze state before this RFC3339 timestamp",
 	)
 
-	excludeOriginator := fs.String(
-		"exclude-originator",
+	legacyExcludeOriginator := fs.String(
+		"legacy-exclude-originator",
 		"",
-		"temporarily exclude an originator such as codex_exec",
+		"exclude historical sessions by originator; intended for legacy cleanup only",
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -71,6 +71,7 @@ func runQuick(args []string) {
 		if err != nil {
 			fatal(fmt.Errorf("invalid --before: %w", err))
 		}
+
 		before = parsed
 	}
 
@@ -88,14 +89,15 @@ func runQuick(args []string) {
 	modelCounts := map[string]int{}
 
 	var (
-		sessionCount     int
-		turnCount        int
-		completedCount   int
-		totalTokens      int64
-		totalDurationMS  int64
-		totalToolCalls   int64
-		readErrors       int
-		excludedSessions int
+		sessionCount           int
+		turnCount              int
+		completedCount         int
+		totalTokens            int64
+		totalDurationMS        int64
+		totalToolCalls         int64
+		readErrors             int
+		excludedJudgeSessions  int
+		legacyExcludedSessions int
 	)
 
 	for _, file := range files {
@@ -109,8 +111,20 @@ func runQuick(args []string) {
 			continue
 		}
 
-		if *excludeOriginator != "" && meta.Originator == *excludeOriginator {
-			excludedSessions++
+		isJudge, err := sessions.IsInsightsJudgeSession(file)
+		if err != nil {
+			readErrors++
+			continue
+		}
+
+		if isJudge {
+			excludedJudgeSessions++
+			continue
+		}
+
+		if *legacyExcludeOriginator != "" &&
+			meta.Originator == *legacyExcludeOriginator {
+			legacyExcludedSessions++
 			continue
 		}
 
@@ -160,7 +174,7 @@ func runQuick(args []string) {
 	fmt.Println("====================")
 
 	if *days == 0 {
-		fmt.Printf("Period: all history")
+		fmt.Print("Period: all history")
 	} else {
 		fmt.Printf("Period: last %d days", *days)
 	}
@@ -181,9 +195,18 @@ func runQuick(args []string) {
 	if completedCount > 0 {
 		fmt.Println()
 		fmt.Println("Completed task averages:")
-		fmt.Printf("  Tokens:     %.0f\n", float64(totalTokens)/float64(completedCount))
-		fmt.Printf("  Duration:   %.1f sec\n", float64(totalDurationMS)/float64(completedCount)/1000)
-		fmt.Printf("  Tool calls: %.1f\n", float64(totalToolCalls)/float64(completedCount))
+		fmt.Printf(
+			"  Tokens:     %.0f\n",
+			float64(totalTokens)/float64(completedCount),
+		)
+		fmt.Printf(
+			"  Duration:   %.1f sec\n",
+			float64(totalDurationMS)/float64(completedCount)/1000,
+		)
+		fmt.Printf(
+			"  Tool calls: %.1f\n",
+			float64(totalToolCalls)/float64(completedCount),
+		)
 	}
 
 	stats := make([]modelStat, 0, len(modelCounts))
@@ -206,12 +229,17 @@ func runQuick(args []string) {
 		fmt.Printf("  %4d  %s\n", stat.Count, stat.Key)
 	}
 
-	if *excludeOriginator != "" {
-		fmt.Println()
+	fmt.Println()
+	fmt.Printf(
+		"Auto-excluded Codex Insights judge sessions: %d\n",
+		excludedJudgeSessions,
+	)
+
+	if *legacyExcludeOriginator != "" {
 		fmt.Printf(
-			"Excluded %s sessions: %d\n",
-			*excludeOriginator,
-			excludedSessions,
+			"Legacy-excluded %s sessions: %d\n",
+			*legacyExcludeOriginator,
+			legacyExcludedSessions,
 		)
 	}
 
