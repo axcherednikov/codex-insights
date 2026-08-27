@@ -7,8 +7,9 @@ import (
 )
 
 type Event struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
+	Timestamp string          `json:"timestamp"`
+	Type      string          `json:"type"`
+	Payload   json.RawMessage `json:"payload"`
 }
 
 type SessionMeta struct {
@@ -16,6 +17,7 @@ type SessionMeta struct {
 	Originator   string `json:"originator"`
 	ThreadSource string `json:"thread_source"`
 	Source       any    `json:"source"`
+	StartedAt    string `json:"-"`
 }
 
 func ReadMeta(path string) (SessionMeta, error) {
@@ -42,6 +44,7 @@ func ReadMeta(path string) (SessionMeta, error) {
 		if err := json.Unmarshal(event.Payload, &meta); err != nil {
 			return SessionMeta{}, err
 		}
+		meta.StartedAt = event.Timestamp
 
 		return meta, nil
 	}

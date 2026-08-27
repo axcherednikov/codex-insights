@@ -95,6 +95,7 @@ func runAnalyze(args []string) {
 
 	var (
 		allInteractions       []sessions.Interaction
+		allTurns              []sessions.Turn
 		followups             []sessions.Followup
 		userSessions          int
 		excludedJudgeSessions int
@@ -116,7 +117,9 @@ func runAnalyze(args []string) {
 		}
 
 		if isJudge {
-			excludedJudgeSessions++
+			if timestampInWindow(meta.StartedAt, since, before) {
+				excludedJudgeSessions++
+			}
 			continue
 		}
 
@@ -138,6 +141,11 @@ func runAnalyze(args []string) {
 
 		userSessions++
 		allInteractions = append(allInteractions, filtered...)
+
+		turns, err := sessions.ParseTurns(file, before)
+		if err == nil {
+			allTurns = append(allTurns, filterTurns(turns, since, before)...)
+		}
 		followups = append(
 			followups,
 			sessions.BuildFollowups(filtered)...,
@@ -157,6 +165,7 @@ func runAnalyze(args []string) {
 
 	if len(followups) == 0 {
 		fmt.Println(tr.T("nothing_to_analyze"))
+		printHumanInsights(tr, analyze.EffectivenessAnalysis{}, nil, nil, nil, nil, nil, nil, nil)
 		return
 	}
 
@@ -200,11 +209,7 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
-	if tr.Language == i18n.Russian {
-		fmt.Println("Анализируем способы снижения корректировок...")
-	} else {
-		fmt.Println("Running prevention analysis...")
-	}
+	fmt.Println(tr.T("running_prevention"))
 
 	preventionAnalyzer, err := analyze.NewPreventionAnalyzer()
 	if err != nil {
@@ -219,11 +224,52 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
-	if tr.Language == i18n.Russian {
-		fmt.Println("Анализируем недостающие проверки...")
-	} else {
-		fmt.Println("Running validation gap analysis...")
+	fmt.Println(tr.T("running_prompt_quality"))
+
+	promptQualityAnalyzer, err := analyze.NewPromptQualityAnalyzer()
+	if err != nil {
+		fatal(err)
 	}
+
+	promptQualityAnalysis, err := promptQualityAnalyzer.Analyze(
+		followups,
+		preventionAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
+	fmt.Println(tr.T("running_agents_rules"))
+
+	agentsRulesAnalyzer, err := analyze.NewAgentsRulesAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
+
+	agentsRulesAnalysis, err := agentsRulesAnalyzer.Analyze(
+		followups,
+		preventionAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
+	fmt.Println(tr.T("running_skill_candidates"))
+
+	skillCandidatesAnalyzer, err := analyze.NewSkillCandidatesAnalyzer()
+	if err != nil {
+		fatal(err)
+	}
+
+	skillCandidatesAnalysis, err := skillCandidatesAnalyzer.Analyze(
+		followups,
+		preventionAnalysis.Results,
+	)
+	if err != nil {
+		fatal(err)
+	}
+
+	fmt.Println(tr.T("running_validation"))
 
 	validationAnalyzer, err := analyze.NewValidationAnalyzer()
 	if err != nil {
@@ -283,49 +329,16 @@ func runAnalyze(args []string) {
 		reasonAnalysis.Evaluated,
 	)
 
-	if tr.Language == i18n.Russian {
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Способов предотвращения из кеша:",
-			preventionAnalysis.CacheHits,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Новых оценок предотвращения:",
-			preventionAnalysis.Evaluated,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Проверок из кеша:",
-			validationAnalysis.CacheHits,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Новых оценок проверок:",
-			validationAnalysis.Evaluated,
-		)
-	} else {
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Prevention cache hits:",
-			preventionAnalysis.CacheHits,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Prevention newly evaluated:",
-			preventionAnalysis.Evaluated,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Validation cache hits:",
-			validationAnalysis.CacheHits,
-		)
-		fmt.Printf(
-			"  %-36s %d\n",
-			"Validation newly evaluated:",
-			validationAnalysis.Evaluated,
-		)
-	}
+	fmt.Printf("  %-36s %d\n", tr.T("prevention_cache_hits"), preventionAnalysis.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("prevention_new"), preventionAnalysis.Evaluated)
+	fmt.Printf("  %-36s %d\n", tr.T("prompt_quality_cache_hits"), promptQualityAnalysis.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("prompt_quality_new"), promptQualityAnalysis.Evaluated)
+	fmt.Printf("  %-36s %d\n", tr.T("agents_rules_cache_hits"), agentsRulesAnalysis.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("agents_rules_new"), agentsRulesAnalysis.Evaluated)
+	fmt.Printf("  %-36s %d\n", tr.T("skill_candidates_cache_hits"), skillCandidatesAnalysis.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("skill_candidates_new"), skillCandidatesAnalysis.Evaluated)
+	fmt.Printf("  %-36s %d\n", tr.T("validation_cache_hits"), validationAnalysis.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("validation_new"), validationAnalysis.Evaluated)
 
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("behavior"))
@@ -359,6 +372,9 @@ func runAnalyze(args []string) {
 
 	printSteeringReasons(tr, reasonAnalysis.Results)
 	printPrevention(tr, preventionAnalysis.Results)
+	printPromptQuality(tr, promptQualityAnalysis.Results)
+	printAgentsRecommendations(tr, agentsRulesAnalysis.Results)
+	printSkillCandidates(tr, skillCandidatesAnalysis.Results)
 	printValidation(tr, validationAnalysis.Results)
 	printTaskTypes(tr, taskTypeAnalysis.Results)
 
@@ -367,6 +383,24 @@ func runAnalyze(args []string) {
 		followups,
 		steeringAnalysis.Results,
 		taskTypeAnalysis.Results,
+	)
+
+	effectiveness := analyze.AggregateEffectiveness(
+		allTurns,
+		taskTypeAnalysis.Results,
+		steeringAnalysis.Results,
+	)
+	printEffectiveness(tr, effectiveness)
+	printHumanInsights(
+		tr,
+		effectiveness,
+		steeringAnalysis.Results,
+		reasonAnalysis.Results,
+		preventionAnalysis.Results,
+		promptQualityAnalysis.Results,
+		agentsRulesAnalysis.Results,
+		skillCandidatesAnalysis.Results,
+		validationAnalysis.Results,
 	)
 }
 
@@ -559,5 +593,20 @@ func filterInteractions(
 		result = append(result, interaction)
 	}
 
+	return result
+}
+
+func filterTurns(input []sessions.Turn, since time.Time, before time.Time) []sessions.Turn {
+	result := make([]sessions.Turn, 0, len(input))
+	for _, turn := range input {
+		startedAt, err := time.Parse(time.RFC3339Nano, turn.StartedAt)
+		if err != nil || startedAt.After(before) {
+			continue
+		}
+		if !since.IsZero() && startedAt.Before(since) {
+			continue
+		}
+		result = append(result, turn)
+	}
 	return result
 }

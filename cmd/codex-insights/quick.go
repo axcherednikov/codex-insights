@@ -119,7 +119,9 @@ func runQuick(args []string) {
 		}
 
 		if isJudge {
-			excludedJudgeSessions++
+			if timestampInWindow(meta.StartedAt, since, before) {
+				excludedJudgeSessions++
+			}
 			continue
 		}
 

@@ -102,7 +102,7 @@ func (a ValidationAnalyzer) Analyze(
 
 		batch := pending[start:end]
 
-		results, err := a.analyzeBatch(batch)
+		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
 			return ValidationAnalysis{}, fmt.Errorf(
 				"analyze validation batch %d-%d: %w",

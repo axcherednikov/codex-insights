@@ -95,7 +95,7 @@ func (a TaskTypeAnalyzer) Analyze(
 
 		batch := pending[start:end]
 
-		batchResults, err := a.analyzeBatch(batch)
+		batchResults, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
 			return TaskTypeAnalysis{}, fmt.Errorf(
 				"analyze task type batch %d-%d: %w",
@@ -237,6 +237,13 @@ func validateTaskTypeResults(
 			)
 		}
 
+		if !isTaskType(result.Type) {
+			return fmt.Errorf(
+				"judge returned unsupported task type %q",
+				result.Type,
+			)
+		}
+
 		seen[result.TurnID] = struct{}{}
 	}
 
@@ -249,6 +256,15 @@ func validateTaskTypeResults(
 	}
 
 	return nil
+}
+
+func isTaskType(value string) bool {
+	switch value {
+	case "bugfix", "feature", "refactor", "tests", "code_review", "architecture", "devops", "research", "documentation", "other":
+		return true
+	default:
+		return false
+	}
 }
 
 func taskTypeCacheKey(task sessions.Interaction) string {

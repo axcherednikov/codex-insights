@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 func main() {
@@ -32,4 +33,12 @@ func printUsage() {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+func timestampInWindow(raw string, since time.Time, before time.Time) bool {
+	startedAt, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || startedAt.After(before) {
+		return false
+	}
+	return since.IsZero() || !startedAt.Before(since)
 }

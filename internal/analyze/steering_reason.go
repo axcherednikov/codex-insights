@@ -102,7 +102,7 @@ func (a SteeringReasonAnalyzer) Analyze(
 
 		batch := pending[start:end]
 
-		results, err := a.analyzeBatch(batch)
+		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
 			return SteeringReasonAnalysis{}, fmt.Errorf(
 				"analyze steering reason batch %d-%d: %w",
@@ -245,6 +245,13 @@ func validateSteeringReasonResults(
 			)
 		}
 
+		if !isSteeringReason(result.Reason) {
+			return fmt.Errorf(
+				"judge returned unsupported steering reason %q",
+				result.Reason,
+			)
+		}
+
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 
@@ -257,6 +264,15 @@ func validateSteeringReasonResults(
 	}
 
 	return nil
+}
+
+func isSteeringReason(value string) bool {
+	switch value {
+	case "misunderstood_request", "overengineering", "implementation_error", "ignored_constraints", "insufficient_validation", "architecture_mismatch", "wrong_output_format", "other":
+		return true
+	default:
+		return false
+	}
 }
 
 func steeringReasonCacheKey(item sessions.Followup) string {

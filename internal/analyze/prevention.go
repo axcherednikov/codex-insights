@@ -103,7 +103,7 @@ func (a PreventionAnalyzer) Analyze(
 
 		batch := pending[start:end]
 
-		results, err := a.analyzeBatch(batch)
+		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
 			return PreventionAnalysis{}, fmt.Errorf(
 				"analyze prevention batch %d-%d: %w",

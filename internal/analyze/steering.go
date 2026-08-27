@@ -44,7 +44,7 @@ func NewSteeringAnalyzer() (SteeringAnalyzer, error) {
 	return SteeringAnalyzer{
 		runner:    judge.New(),
 		cache:     store,
-		batchSize: 25,
+		batchSize: 10,
 	}, nil
 }
 
@@ -85,7 +85,7 @@ func (a SteeringAnalyzer) Analyze(
 
 		batch := pending[start:end]
 
-		batchResults, err := a.analyzeBatch(batch)
+		batchResults, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
 			return SteeringAnalysis{}, fmt.Errorf(
 				"analyze follow-up batch %d-%d: %w",
@@ -223,6 +223,13 @@ func validateSteeringResults(
 			)
 		}
 
+		if !isSteeringLabel(result.Label) {
+			return fmt.Errorf(
+				"judge returned unsupported steering label %q",
+				result.Label,
+			)
+		}
+
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 
@@ -235,6 +242,15 @@ func validateSteeringResults(
 	}
 
 	return nil
+}
+
+func isSteeringLabel(value string) bool {
+	switch value {
+	case "steering", "continuation", "user_correction", "question":
+		return true
+	default:
+		return false
+	}
 }
 
 func steeringCacheKey(followup sessions.Followup) string {

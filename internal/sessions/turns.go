@@ -4,19 +4,21 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"strings"
 	"time"
 )
 
 type Turn struct {
-	ID         string
-	Status     string
-	Model      string
-	Effort     string
-	StartedAt  string
-	Tokens     int64
-	DurationMS int64
-	TTFTMS     int64
-	ToolCalls  int
+	ID            string
+	Status        string
+	Model         string
+	Effort        string
+	StartedAt     string
+	Tokens        int64
+	DurationMS    int64
+	TTFTMS        int64
+	ToolCalls     int
+	UsesSubagents bool
 }
 
 type rawRecord struct {
@@ -45,7 +47,9 @@ type turnContextPayload struct {
 }
 
 type responsePayload struct {
-	Type string `json:"type"`
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	ToolName string `json:"tool_name"`
 }
 
 func ParseTurns(path string, before time.Time) ([]Turn, error) {
@@ -154,6 +158,9 @@ func ParseTurns(path string, before time.Time) ([]Turn, error) {
 			if payload.Type == "function_call" ||
 				payload.Type == "custom_tool_call" {
 				current.ToolCalls++
+				if isSpawnAgentTool(payload.Name) || isSpawnAgentTool(payload.ToolName) {
+					current.UsesSubagents = true
+				}
 			}
 		}
 	}
@@ -168,4 +175,15 @@ func ParseTurns(path string, before time.Time) ([]Turn, error) {
 	}
 
 	return turns, nil
+}
+
+func isSpawnAgentTool(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "spawn_agent" {
+		return true
+	}
+	return strings.HasSuffix(name, ".spawn_agent") ||
+		strings.HasSuffix(name, "/spawn_agent") ||
+		strings.HasSuffix(name, ":spawn_agent") ||
+		strings.HasSuffix(name, "__spawn_agent")
 }
