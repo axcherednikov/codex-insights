@@ -6,12 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"codex-insights/internal/analyze"
+	"codex-insights/internal/golden"
 	"codex-insights/internal/i18n"
 	"codex-insights/internal/sessions"
 )
+
+const maxSemanticConcurrency = 32
 
 type taskBehaviorStat struct {
 	Type      string
@@ -62,7 +66,28 @@ func runAnalyze(args []string) {
 		"exclude historical sessions by originator",
 	)
 
+	concurrency := fs.Int(
+		"concurrency",
+		analyze.SemanticDefaultWorkers,
+		"number of semantic Judge workers (1-32)",
+	)
+
+	cachePath := fs.String(
+		"cache",
+		"",
+		"semantic cache path; empty uses the default",
+	)
+
+	verbose := fs.Bool(
+		"verbose",
+		false,
+		"print timing and semantic methodology metadata",
+	)
+
 	if err := fs.Parse(args); err != nil {
+		fatal(err)
+	}
+	if err := validateSemanticConcurrency(*concurrency); err != nil {
 		fatal(err)
 	}
 
@@ -88,70 +113,22 @@ func runAnalyze(args []string) {
 		since = before.Add(-time.Duration(*days) * 24 * time.Hour)
 	}
 
+	discoveryStarted := time.Now()
 	files, err := sessions.FindRollouts(*sessionsPath)
 	if err != nil {
 		fatal(err)
 	}
+	discoveryDuration := time.Since(discoveryStarted)
+	parsingStarted := time.Now()
+	collected := collectSessionFiles(files, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator})
+	allInteractions := collected.Interactions
+	allTurns := collected.Turns
+	followups := collected.Followups
+	userSessions := collected.UserSessions
+	excludedJudgeSessions := collected.ExcludedJudgeSessions
+	parsingDuration := time.Since(parsingStarted)
 
-	var (
-		allInteractions       []sessions.Interaction
-		allTurns              []sessions.Turn
-		followups             []sessions.Followup
-		userSessions          int
-		excludedJudgeSessions int
-	)
-
-	for _, file := range files {
-		meta, err := sessions.ReadMeta(file)
-		if err != nil {
-			continue
-		}
-
-		if meta.ThreadSource != "user" {
-			continue
-		}
-
-		isJudge, err := sessions.IsInsightsJudgeSession(file)
-		if err != nil {
-			continue
-		}
-
-		if isJudge {
-			if timestampInWindow(meta.StartedAt, since, before) {
-				excludedJudgeSessions++
-			}
-			continue
-		}
-
-		if *legacyExcludeOriginator != "" &&
-			meta.Originator == *legacyExcludeOriginator {
-			continue
-		}
-
-		interactions, err := sessions.ParseInteractions(file, before)
-		if err != nil {
-			continue
-		}
-
-		filtered := filterInteractions(interactions, since, before)
-
-		if len(filtered) == 0 {
-			continue
-		}
-
-		userSessions++
-		allInteractions = append(allInteractions, filtered...)
-
-		turns, err := sessions.ParseTurns(file, before)
-		if err == nil {
-			allTurns = append(allTurns, filterTurns(turns, since, before)...)
-		}
-		followups = append(
-			followups,
-			sessions.BuildFollowups(filtered)...,
-		)
-	}
-
+	headerStarted := time.Now()
 	fmt.Println(tr.T("analyze_title"))
 	fmt.Println("======================")
 	fmt.Printf("%s: %d\n", tr.T("user_sessions"), userSessions)
@@ -162,183 +139,97 @@ func runAnalyze(args []string) {
 		tr.T("auto_excluded_judges"),
 		excludedJudgeSessions,
 	)
+	headerDuration := time.Since(headerStarted)
 
 	if len(followups) == 0 {
+		reportBodyStarted := time.Now()
 		fmt.Println(tr.T("nothing_to_analyze"))
 		printHumanInsights(tr, analyze.EffectivenessAnalysis{}, nil, nil, nil, nil, nil, nil, nil)
+		printHistoricalGuard(tr, golden.HistoricalOptions{Days: *days, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator}, allInteractions, allTurns, followups, nil)
+		if *verbose {
+			defaults := analyze.DefaultSemanticConfig()
+			printSemanticTimings(tr, analysisTimings{discovery: discoveryDuration, parsing: parsingDuration, report: finalReportDuration(headerDuration, time.Since(reportBodyStarted))}, analyze.SemanticStats{
+				Methodology: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion,
+				SchemaVersion: defaults.SchemaVersion, Model: defaults.Model, Effort: defaults.Effort,
+			})
+		}
 		return
 	}
 
 	fmt.Println()
-	fmt.Println(tr.T("running_steering"))
-
-	steeringAnalyzer, err := analyze.NewSteeringAnalyzer()
+	store, err := newSemanticCache(*cachePath)
 	if err != nil {
 		fatal(err)
 	}
+	config := analyze.DefaultSemanticConfig()
+	config.Cache = store
+	config.Workers = *concurrency
+	renderer := newSemanticProgressRenderer(tr, os.Stdout, stdoutIsTTY())
+	var progressMu sync.Mutex
+	var firstProgress bool
+	var cacheLookupDuration time.Duration
+	config.Progress = func(progress analyze.SemanticProgress) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if !firstProgress {
+			firstProgress = true
+			cacheLookupDuration = progress.Elapsed
+		}
+		renderer.Update(progress)
+	}
+	semanticAnalysis, err := analyze.NewSemanticEngine(config).AnalyzeInteractions(allInteractions, followups)
+	if err != nil {
+		renderer.Finish()
+		fatal(err)
+	}
+	renderer.Finish()
+	semanticDuration := semanticAnalysis.Stats.Elapsed
+	judgeDuration := semanticDuration - cacheLookupDuration
+	if judgeDuration < 0 {
+		judgeDuration = 0
+	}
 
-	steeringAnalysis, err := steeringAnalyzer.Analyze(followups)
+	conversionStarted := time.Now()
+	converted, err := convertSemanticAnalysis(semanticAnalysis, followups)
 	if err != nil {
 		fatal(err)
 	}
+	conversionDuration := time.Since(conversionStarted)
 
-	fmt.Println(tr.T("running_task_types"))
-
-	taskTypeAnalyzer, err := analyze.NewTaskTypeAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	taskTypeAnalysis, err := taskTypeAnalyzer.Analyze(allInteractions)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_reasons"))
-
-	reasonAnalyzer, err := analyze.NewSteeringReasonAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	reasonAnalysis, err := reasonAnalyzer.Analyze(
-		followups,
-		steeringAnalysis.Results,
+	aggregationStarted := time.Now()
+	effectiveness := analyze.AggregateEffectiveness(
+		allTurns,
+		converted.taskTypes,
+		converted.steering,
 	)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_prevention"))
-
-	preventionAnalyzer, err := analyze.NewPreventionAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	preventionAnalysis, err := preventionAnalyzer.Analyze(
-		followups,
-		steeringAnalysis.Results,
-	)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_prompt_quality"))
-
-	promptQualityAnalyzer, err := analyze.NewPromptQualityAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	promptQualityAnalysis, err := promptQualityAnalyzer.Analyze(
-		followups,
-		preventionAnalysis.Results,
-	)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_agents_rules"))
-
-	agentsRulesAnalyzer, err := analyze.NewAgentsRulesAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	agentsRulesAnalysis, err := agentsRulesAnalyzer.Analyze(
-		followups,
-		preventionAnalysis.Results,
-	)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_skill_candidates"))
-
-	skillCandidatesAnalyzer, err := analyze.NewSkillCandidatesAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	skillCandidatesAnalysis, err := skillCandidatesAnalyzer.Analyze(
-		followups,
-		preventionAnalysis.Results,
-	)
-	if err != nil {
-		fatal(err)
-	}
-
-	fmt.Println(tr.T("running_validation"))
-
-	validationAnalyzer, err := analyze.NewValidationAnalyzer()
-	if err != nil {
-		fatal(err)
-	}
-
-	validationAnalysis, err := validationAnalyzer.Analyze(
-		followups,
-		preventionAnalysis.Results,
-	)
-	if err != nil {
-		fatal(err)
-	}
+	steeringResults := converted.steering
+	taskTypeResults := converted.taskTypes
+	reasonResults := converted.reasons
+	preventionResults := converted.prevention
+	promptQualityResults := converted.promptQuality
+	agentsRulesResults := converted.agentsRules
+	skillCandidatesResults := converted.skillCandidates
+	validationResults := converted.validation
 
 	behaviorCounts := map[string]int{}
 
-	for _, result := range steeringAnalysis.Results {
+	for _, result := range steeringResults {
 		behaviorCounts[result.Label]++
 	}
 
 	steeringCount := behaviorCounts["steering"]
 	steeringRate := 100 *
 		float64(steeringCount) /
-		float64(len(steeringAnalysis.Results))
+		float64(len(steeringResults))
+	aggregationDuration := time.Since(aggregationStarted)
 
+	reportBodyStarted := time.Now()
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("judge"))
-
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("steering_cache_hits")+":",
-		steeringAnalysis.CacheHits,
-	)
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("steering_new")+":",
-		steeringAnalysis.Evaluated,
-	)
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("task_type_cache_hits")+":",
-		taskTypeAnalysis.CacheHits,
-	)
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("task_type_new")+":",
-		taskTypeAnalysis.Evaluated,
-	)
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("reason_cache_hits")+":",
-		reasonAnalysis.CacheHits,
-	)
-	fmt.Printf(
-		"  %-36s %d\n",
-		tr.T("reason_new")+":",
-		reasonAnalysis.Evaluated,
-	)
-
-	fmt.Printf("  %-36s %d\n", tr.T("prevention_cache_hits"), preventionAnalysis.CacheHits)
-	fmt.Printf("  %-36s %d\n", tr.T("prevention_new"), preventionAnalysis.Evaluated)
-	fmt.Printf("  %-36s %d\n", tr.T("prompt_quality_cache_hits"), promptQualityAnalysis.CacheHits)
-	fmt.Printf("  %-36s %d\n", tr.T("prompt_quality_new"), promptQualityAnalysis.Evaluated)
-	fmt.Printf("  %-36s %d\n", tr.T("agents_rules_cache_hits"), agentsRulesAnalysis.CacheHits)
-	fmt.Printf("  %-36s %d\n", tr.T("agents_rules_new"), agentsRulesAnalysis.Evaluated)
-	fmt.Printf("  %-36s %d\n", tr.T("skill_candidates_cache_hits"), skillCandidatesAnalysis.CacheHits)
-	fmt.Printf("  %-36s %d\n", tr.T("skill_candidates_new"), skillCandidatesAnalysis.Evaluated)
-	fmt.Printf("  %-36s %d\n", tr.T("validation_cache_hits"), validationAnalysis.CacheHits)
-	fmt.Printf("  %-36s %d\n", tr.T("validation_new"), validationAnalysis.Evaluated)
+	fmt.Printf("  %-36s %d\n", tr.T("semantic_cache_hits")+":", semanticAnalysis.Stats.CacheHits)
+	fmt.Printf("  %-36s %d\n", tr.T("semantic_new")+":", semanticAnalysis.Stats.EvaluatedRecords)
+	fmt.Printf("  %-36s %s\n", tr.T("semantic_methodology")+":", semanticAnalysis.Stats.Methodology)
+	fmt.Printf("  %-36s %s / %s\n", tr.T("semantic_model")+":", semanticAnalysis.Stats.Model, semanticAnalysis.Stats.Effort)
 
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("behavior"))
@@ -346,7 +237,7 @@ func runAnalyze(args []string) {
 	fmt.Printf(
 		"  %-36s %d\n",
 		tr.T("analyzed")+":",
-		len(steeringAnalysis.Results),
+		len(steeringResults),
 	)
 	fmt.Printf(
 		"  %-36s %d (%.1f%%)\n",
@@ -370,38 +261,42 @@ func runAnalyze(args []string) {
 		behaviorCounts["user_correction"],
 	)
 
-	printSteeringReasons(tr, reasonAnalysis.Results)
-	printPrevention(tr, preventionAnalysis.Results)
-	printPromptQuality(tr, promptQualityAnalysis.Results)
-	printAgentsRecommendations(tr, agentsRulesAnalysis.Results)
-	printSkillCandidates(tr, skillCandidatesAnalysis.Results)
-	printValidation(tr, validationAnalysis.Results)
-	printTaskTypes(tr, taskTypeAnalysis.Results)
+	printSteeringReasons(tr, reasonResults)
+	printPrevention(tr, preventionResults)
+	printPromptQuality(tr, promptQualityResults)
+	printAgentsRecommendations(tr, agentsRulesResults)
+	printSkillCandidates(tr, skillCandidatesResults)
+	printValidation(tr, validationResults)
+	printTaskTypes(tr, taskTypeResults)
 
 	printSteeringByTaskType(
 		tr,
 		followups,
-		steeringAnalysis.Results,
-		taskTypeAnalysis.Results,
+		steeringResults,
+		taskTypeResults,
 	)
 
-	effectiveness := analyze.AggregateEffectiveness(
-		allTurns,
-		taskTypeAnalysis.Results,
-		steeringAnalysis.Results,
-	)
 	printEffectiveness(tr, effectiveness)
 	printHumanInsights(
 		tr,
 		effectiveness,
-		steeringAnalysis.Results,
-		reasonAnalysis.Results,
-		preventionAnalysis.Results,
-		promptQualityAnalysis.Results,
-		agentsRulesAnalysis.Results,
-		skillCandidatesAnalysis.Results,
-		validationAnalysis.Results,
+		steeringResults,
+		reasonResults,
+		preventionResults,
+		promptQualityResults,
+		agentsRulesResults,
+		skillCandidatesResults,
+		validationResults,
 	)
+	printHistoricalGuard(tr, golden.HistoricalOptions{Days: *days, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator}, allInteractions, allTurns, followups, semanticAnalysis.Results)
+	if *verbose {
+		printSemanticTimings(tr, analysisTimings{
+			discovery: discoveryDuration, parsing: parsingDuration,
+			cacheLookup: cacheLookupDuration, judge: judgeDuration,
+			aggregation: aggregationDuration, conversion: conversionDuration,
+			report: finalReportDuration(headerDuration, time.Since(reportBodyStarted)),
+		}, semanticAnalysis.Stats)
+	}
 }
 
 func printSteeringReasons(
@@ -428,7 +323,10 @@ func printSteeringReasons(
 	}
 
 	sort.Slice(stats, func(i, j int) bool {
-		return stats[i].Count > stats[j].Count
+		if stats[i].Count != stats[j].Count {
+			return stats[i].Count > stats[j].Count
+		}
+		return stats[i].Name < stats[j].Name
 	})
 
 	fmt.Println()
@@ -468,7 +366,10 @@ func printTaskTypes(
 	}
 
 	sort.Slice(stats, func(i, j int) bool {
-		return stats[i].Followups > stats[j].Followups
+		if stats[i].Followups != stats[j].Followups {
+			return stats[i].Followups > stats[j].Followups
+		}
+		return stats[i].Type < stats[j].Type
 	})
 
 	fmt.Println()
@@ -544,7 +445,10 @@ func printSteeringByTaskType(
 		rightRate := float64(stats[j].Steering) /
 			float64(stats[j].Followups)
 
-		return leftRate > rightRate
+		if leftRate != rightRate {
+			return leftRate > rightRate
+		}
+		return stats[i].Type < stats[j].Type
 	})
 
 	fmt.Println()

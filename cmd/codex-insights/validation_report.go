@@ -37,7 +37,10 @@ func printValidation(
 	}
 
 	sort.Slice(stats, func(i, j int) bool {
-		return stats[i].Count > stats[j].Count
+		if stats[i].Count != stats[j].Count {
+			return stats[i].Count > stats[j].Count
+		}
+		return stats[i].Type < stats[j].Type
 	})
 
 	fmt.Println()

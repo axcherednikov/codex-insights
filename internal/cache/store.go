@@ -18,6 +18,7 @@ type diskData struct {
 
 type Store struct {
 	mu      sync.RWMutex
+	saveMu  sync.Mutex
 	path    string
 	entries map[string]json.RawMessage
 }
@@ -96,7 +97,13 @@ func (s *Store) Set(key string, value any) error {
 }
 
 func (s *Store) Save() error {
-	s.mu.RLock()
+	// Serialize saves as well as updates to the on-disk file. Sets that arrive
+	// after this operation takes the lock are saved by a later Save call.
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	data, err := json.MarshalIndent(
 		diskData{
@@ -106,8 +113,6 @@ func (s *Store) Save() error {
 		"",
 		"  ",
 	)
-
-	s.mu.RUnlock()
 
 	if err != nil {
 		return fmt.Errorf("encode cache: %w", err)
@@ -120,8 +125,30 @@ func (s *Store) Save() error {
 		return fmt.Errorf("create cache directory: %w", err)
 	}
 
-	if err := os.WriteFile(s.path, data, 0o600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".analysis-cache-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create cache temporary file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set cache temporary file permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write cache: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync cache: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close cache temporary file: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return fmt.Errorf("replace cache: %w", err)
 	}
 
 	return nil

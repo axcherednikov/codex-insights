@@ -44,7 +44,10 @@ func printPrevention(
 	}
 
 	sort.Slice(stats, func(i, j int) bool {
-		return stats[i].Count > stats[j].Count
+		if stats[i].Count != stats[j].Count {
+			return stats[i].Count > stats[j].Count
+		}
+		return stats[i].Name < stats[j].Name
 	})
 
 	if tr.Language == i18n.Russian {

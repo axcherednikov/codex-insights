@@ -8,7 +8,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
+		runQuick(nil)
 		return
 	}
 
@@ -17,6 +17,24 @@ func main() {
 		runQuick(os.Args[2:])
 	case "analyze":
 		runAnalyze(os.Args[2:])
+	case "golden":
+		if len(os.Args) < 3 {
+			printUsage()
+			return
+		}
+		var err error
+		switch os.Args[2] {
+		case "export":
+			err = runGoldenExport(os.Args[3:])
+		case "evaluate":
+			err = runGoldenEvaluate(os.Args[3:])
+		default:
+			printUsage()
+			return
+		}
+		if err != nil {
+			fatal(err)
+		}
 	default:
 		printUsage()
 	}
@@ -28,6 +46,8 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  codex-insights quick [options]")
 	fmt.Println("  codex-insights analyze [options]")
+	fmt.Println("  codex-insights golden export [options]")
+	fmt.Println("  codex-insights golden evaluate [options]")
 }
 
 func fatal(err error) {
