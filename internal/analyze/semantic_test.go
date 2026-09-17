@@ -15,17 +15,19 @@ import (
 )
 
 type semanticFakeRunner struct {
-	mu                sync.Mutex
-	calls             int
-	active            int
-	maxActive         int
-	failLarge         bool
-	transientFailures int
-	forcedError       error
-	invalidTurnID     string
-	failSingletonID   string
-	lastPrompt        string
-	delay             time.Duration
+	mu                 sync.Mutex
+	calls              int
+	active             int
+	maxActive          int
+	failLarge          bool
+	transientFailures  int
+	invalidResponses   int
+	requireEmptyTarget bool
+	forcedError        error
+	invalidTurnID      string
+	failSingletonID    string
+	lastPrompt         string
+	delay              time.Duration
 }
 
 func (f *semanticFakeRunner) Run(prompt string, schema any, target any) error {
@@ -72,6 +74,16 @@ func (f *semanticFakeRunner) Run(prompt string, schema any, target any) error {
 		return errors.New("non-transient sibling failure")
 	}
 	response := target.(*semanticJudgeResponse)
+	f.mu.Lock()
+	targetHasResidualResults := f.requireEmptyTarget && len(response.Results) != 0
+	invalidResponse := f.invalidResponses > 0
+	if invalidResponse {
+		f.invalidResponses--
+	}
+	f.mu.Unlock()
+	if targetHasResidualResults {
+		return errors.New("semantic runner received response target with residual results")
+	}
 	response.Results = make([]semanticJudgeResult, len(ids))
 	for i, item := range ids {
 		falseValue := false
@@ -82,9 +94,51 @@ func (f *semanticFakeRunner) Run(prompt string, schema any, target any) error {
 			result.TaskType = nil
 			result.TaskConfidence = nil
 		}
+		if invalidResponse {
+			result.TaskType = nil
+		}
 		response.Results[i] = result
 	}
 	return nil
+}
+
+func TestSemanticEngineRejectsBlankExplicitFollowupBeforeRunner(t *testing.T) {
+	runner := &semanticFakeRunner{}
+	_, err := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 0}).Analyze([]SemanticInput{{
+		TurnID:   "task",
+		Prompt:   "task prompt",
+		Followup: &SemanticFollowup{TurnID: "followup", Prompt: ""},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "blank follow-up prompt") {
+		t.Fatalf("Analyze error = %v, want blank follow-up validation error", err)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("runner calls = %d, want 0", runner.calls)
+	}
+}
+
+func TestSemanticEngineRetriesInvalidSingletonResponse(t *testing.T) {
+	runner := &semanticFakeRunner{invalidResponses: 1, requireEmptyTarget: true}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 2, RetryBackoff: func(int) time.Duration { return 0 }})
+	analysis, err := engine.Analyze(semanticInputs(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.Results) != 1 || runner.calls != 2 {
+		t.Fatalf("results=%#v calls=%d, want one result after two calls", analysis.Results, runner.calls)
+	}
+}
+
+func TestSemanticEngineReturnsSemanticValidationErrorAfterInvalidSingletonRetries(t *testing.T) {
+	runner := &semanticFakeRunner{invalidResponses: 3}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 2, RetryBackoff: func(int) time.Duration { return 0 }})
+	_, err := engine.Analyze(semanticInputs(1))
+	if err == nil || !strings.Contains(err.Error(), "requires task type and confidence") {
+		t.Fatalf("Analyze error = %v, want semantic validation error", err)
+	}
+	if runner.calls != 3 {
+		t.Fatalf("runner calls = %d, want 3", runner.calls)
+	}
 }
 
 // Kept as a variable-sized helper to keep fake runner setup readable.

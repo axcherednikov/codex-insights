@@ -1,5 +1,7 @@
 package sessions
 
+import "strings"
+
 type Followup struct {
 	PreviousTurnID string
 	TurnID         string
@@ -25,6 +27,9 @@ func BuildFollowups(interactions []Interaction) []Followup {
 	for i := 1; i < len(completed); i++ {
 		previous := completed[i-1]
 		current := completed[i]
+		if strings.TrimSpace(current.Prompt) == "" {
+			continue
+		}
 
 		result = append(result, Followup{
 			PreviousTurnID: previous.TurnID,

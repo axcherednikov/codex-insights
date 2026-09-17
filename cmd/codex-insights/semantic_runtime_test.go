@@ -96,6 +96,9 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 	if lines := strings.Count(cold.String(), "Semantic analysis:"); lines > 12 {
 		t.Fatalf("non-TTY progress was unbounded: %d lines", lines)
 	}
+	if strings.Contains(cold.String(), "\x1b[") {
+		t.Fatalf("non-TTY progress contains ANSI escapes: %q", cold.String())
+	}
 
 	ru, err := i18n.New("ru")
 	if err != nil {
@@ -113,6 +116,46 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 		if strings.Contains(ruText, internal) {
 			t.Fatalf("Russian cold progress leaked %q: %q", internal, ruText)
 		}
+	}
+}
+
+func TestSemanticProgressTTYHeartbeatAnimatesBetweenCompletedBatches(t *testing.T) {
+	tr, err := i18n.New("ru")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	renderer := newSemanticProgressRenderer(tr, &output, true)
+	renderer.heartbeatInterval = time.Hour
+	renderer.Update(analyze.SemanticProgress{
+		TotalRecords: 805, CompletedRecords: 290, CacheHits: 290,
+		ConfiguredWorkers: 6, Elapsed: 5 * time.Millisecond,
+	})
+
+	renderer.pulse(renderer.lastUpdate.Add(2 * time.Second))
+	renderer.Finish()
+
+	text := output.String()
+	if strings.Count(text, "\r") < 2 {
+		t.Fatalf("TTY progress was not redrawn: %q", text)
+	}
+	if !strings.Contains(text, "36% (290/805)") || !strings.Contains(text, "время=2.005s") {
+		t.Fatalf("heartbeat did not preserve progress and advance elapsed time: %q", text)
+	}
+	if !strings.Contains(text, "⠋") || !strings.Contains(text, "⠙") {
+		t.Fatalf("heartbeat spinner did not advance: %q", text)
+	}
+	if !strings.Contains(text, "\x1b[2K") || !strings.Contains(text, "\x1b[36m") {
+		t.Fatalf("TTY heartbeat was not colorized and line-cleared: %q", text)
+	}
+}
+
+func TestANSITextOnlyStylesEnabledOutput(t *testing.T) {
+	if got := ansiText(false, ansiBoldCyan, "heading"); got != "heading" {
+		t.Fatalf("disabled ANSI text = %q", got)
+	}
+	if got := ansiText(true, ansiBoldCyan, "heading"); got != "\x1b[1;36mheading\x1b[0m" {
+		t.Fatalf("enabled ANSI text = %q", got)
 	}
 }
 

@@ -93,18 +93,27 @@ func convertSemanticAnalysis(analysisResult analyze.SemanticAnalysis, followups 
 }
 
 type semanticProgressRenderer struct {
-	translator i18n.Translator
-	writer     io.Writer
-	tty        bool
-	mu         sync.Mutex
-	cold       bool
-	started    bool
-	nextPrint  int
-	finished   bool
+	translator        i18n.Translator
+	writer            io.Writer
+	tty               bool
+	mu                sync.Mutex
+	cold              bool
+	started           bool
+	nextPrint         int
+	finished          bool
+	lastProgress      analyze.SemanticProgress
+	lastUpdate        time.Time
+	spinnerFrame      int
+	heartbeatInterval time.Duration
+	heartbeatStop     chan struct{}
+	heartbeatDone     chan struct{}
 }
 
 func newSemanticProgressRenderer(translator i18n.Translator, writer io.Writer, tty bool) *semanticProgressRenderer {
-	return &semanticProgressRenderer{translator: translator, writer: writer, tty: tty}
+	return &semanticProgressRenderer{
+		translator: translator, writer: writer, tty: tty,
+		heartbeatInterval: 200 * time.Millisecond,
+	}
 }
 
 func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
@@ -119,12 +128,15 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 		if !r.cold {
 			return
 		}
-		fmt.Fprintln(r.writer, r.translator.T("semantic_privacy"))
+		fmt.Fprintln(r.writer, ansiText(r.tty, ansiDim, r.translator.T("semantic_privacy")))
 		r.nextPrint = 0
 	}
 	if !r.cold || progress.TotalRecords <= 0 {
 		return
 	}
+	r.lastProgress = progress
+	r.lastUpdate = time.Now()
+	r.startHeartbeatLocked()
 	percent := progress.CompletedRecords * 100 / progress.TotalRecords
 	if progress.CompletedRecords < progress.TotalRecords && percent < r.nextPrint {
 		return
@@ -132,6 +144,49 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 	for r.nextPrint <= percent {
 		r.nextPrint += 10
 	}
+	r.renderLocked(progress)
+}
+
+func (r *semanticProgressRenderer) startHeartbeatLocked() {
+	if !r.tty || r.heartbeatStop != nil {
+		return
+	}
+	r.heartbeatStop = make(chan struct{})
+	r.heartbeatDone = make(chan struct{})
+	interval := r.heartbeatInterval
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(r.heartbeatDone)
+		for {
+			select {
+			case <-r.heartbeatStop:
+				return
+			case now := <-ticker.C:
+				r.pulse(now)
+			}
+		}
+	}()
+}
+
+func (r *semanticProgressRenderer) pulse(now time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finished || !r.cold || r.lastProgress.TotalRecords <= 0 ||
+		r.lastProgress.CompletedRecords >= r.lastProgress.TotalRecords {
+		return
+	}
+	progress := r.lastProgress
+	if idle := now.Sub(r.lastUpdate); idle > 0 {
+		progress.Elapsed += idle
+	}
+	r.renderLocked(progress)
+}
+
+var semanticSpinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (r *semanticProgressRenderer) renderLocked(progress analyze.SemanticProgress) {
+	percent := progress.CompletedRecords * 100 / progress.TotalRecords
 	line := fmt.Sprintf("%s: %d%% (%d/%d), %s=%d, %s=%d, %s=%s",
 		r.translator.T("semantic_progress"), percent, progress.CompletedRecords, progress.TotalRecords,
 		r.translator.T("semantic_workers"), progress.ConfiguredWorkers,
@@ -139,7 +194,16 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 		r.translator.T("semantic_elapsed"), formatDuration(progress.Elapsed),
 	)
 	if r.tty {
-		fmt.Fprintf(r.writer, "\r%-120s", line)
+		style := ansiCyan
+		if progress.CompletedRecords >= progress.TotalRecords {
+			style = ansiGreen
+		}
+		line = ansiText(true, style, line)
+		if progress.CompletedRecords < progress.TotalRecords {
+			line += " " + ansiText(true, ansiYellow, semanticSpinnerFrames[r.spinnerFrame%len(semanticSpinnerFrames)])
+			r.spinnerFrame++
+		}
+		fmt.Fprintf(r.writer, "\r\x1b[2K%s", line)
 	} else {
 		fmt.Fprintln(r.writer, line)
 	}
@@ -147,13 +211,21 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 
 func (r *semanticProgressRenderer) Finish() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.finished {
+		r.mu.Unlock()
 		return
 	}
 	r.finished = true
+	if r.heartbeatStop != nil {
+		close(r.heartbeatStop)
+	}
+	done := r.heartbeatDone
 	if r.cold && r.tty {
 		fmt.Fprintln(r.writer)
+	}
+	r.mu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 

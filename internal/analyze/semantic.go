@@ -563,10 +563,7 @@ func (e *SemanticEngine) Analyze(inputs []SemanticInput) (SemanticAnalysis, erro
 	}
 dispatch:
 	for start := 0; start < len(pending); start += e.config.BatchSize {
-		end := start + e.config.BatchSize
-		if end > len(pending) {
-			end = len(pending)
-		}
+		end := min(start+e.config.BatchSize, len(pending))
 		select {
 		case <-ctx.Done():
 			break dispatch
@@ -593,6 +590,9 @@ func validateSemanticInputs(inputs []SemanticInput) error {
 		}
 		if _, ok := seen[input.TurnID]; ok {
 			return fmt.Errorf("duplicate semantic input turn id %q", input.TurnID)
+		}
+		if input.Followup != nil && strings.TrimSpace(input.Followup.Prompt) == "" {
+			return fmt.Errorf("semantic input turn %q has blank follow-up prompt", input.TurnID)
 		}
 		seen[input.TurnID] = struct{}{}
 	}
@@ -661,12 +661,13 @@ func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticRes
 		return nil, fmt.Errorf("marshal semantic records: %w", err)
 	}
 	prompt := semanticJudgePrompt + "\n\nRecords:\n" + string(data)
-	var response semanticJudgeResponse
 	var lastErr error
+	var firstValidationErr error
 	for attempt := 0; attempt <= e.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(e.config.RetryBackoff(attempt))
 		}
+		var response semanticJudgeResponse
 		if err := e.config.Runner.Run(prompt, semanticSchema(), &response); err != nil {
 			lastErr = err
 			if !isTransientSemanticError(err) || attempt == e.config.MaxRetries {
@@ -679,18 +680,35 @@ func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticRes
 		for _, input := range inputs {
 			expected[input.TurnID] = input
 		}
+		var validationErr error
 		for i, result := range response.Results {
 			input, ok := expected[result.TurnID]
 			if !ok {
-				return nil, &semanticInvalidBatchError{err: fmt.Errorf("judge returned unexpected turn id %q", result.TurnID)}
+				validationErr = &semanticInvalidBatchError{err: fmt.Errorf("judge returned unexpected turn id %q", result.TurnID)}
+				break
 			}
 			if err := validateSemanticJudgePresence(input, result); err != nil {
-				return nil, &semanticInvalidBatchError{err: err}
+				validationErr = &semanticInvalidBatchError{err: err}
+				break
 			}
 			results[i] = semanticResultFromJudge(result)
 		}
-		if err := ValidateSemanticResults(inputs, results); err != nil {
-			return nil, &semanticInvalidBatchError{err: err}
+		if validationErr == nil {
+			if err := ValidateSemanticResults(inputs, results); err != nil {
+				validationErr = &semanticInvalidBatchError{err: err}
+			}
+		}
+		if validationErr != nil {
+			if len(inputs) != 1 {
+				return nil, validationErr
+			}
+			if firstValidationErr == nil {
+				firstValidationErr = validationErr
+			}
+			if attempt == e.config.MaxRetries {
+				return nil, firstValidationErr
+			}
+			continue
 		}
 		return results, nil
 	}

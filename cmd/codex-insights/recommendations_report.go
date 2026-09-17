@@ -89,7 +89,7 @@ func printPromptQuality(tr i18n.Translator, results []analyze.PromptQualityResul
 		return
 	}
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("prompt_quality"))
+	printConsoleSection(tr.T("prompt_quality"))
 	for _, stat := range stats {
 		fmt.Printf("  %-34s %4d\n", tr.PromptQualityIssue(stat.Issue), stat.Count)
 	}
@@ -101,7 +101,7 @@ func printAgentsRecommendations(tr i18n.Translator, results []analyze.AgentsRule
 		return
 	}
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("agents_recommendations"))
+	printConsoleSection(tr.T("agents_recommendations"))
 	for _, stat := range stats {
 		fmt.Printf("  %-4d %s\n", stat.Count, tr.AgentsRule(stat.Rule))
 	}
@@ -113,7 +113,7 @@ func printSkillCandidates(tr i18n.Translator, results []analyze.SkillCandidateRe
 		return
 	}
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("skill_candidates"))
+	printConsoleSection(tr.T("skill_candidates"))
 	for _, stat := range stats {
 		fmt.Printf("  %s (%d %s)\n", tr.SkillCandidate(stat.Category), stat.Count, tr.T("supporting_cases"))
 		fmt.Printf("    %s\n", tr.SkillCandidatePurpose(stat.Category))

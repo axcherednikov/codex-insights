@@ -129,15 +129,14 @@ func runAnalyze(args []string) {
 	parsingDuration := time.Since(parsingStarted)
 
 	headerStarted := time.Now()
-	fmt.Println(tr.T("analyze_title"))
-	fmt.Println("======================")
-	fmt.Printf("%s: %d\n", tr.T("user_sessions"), userSessions)
-	fmt.Printf("%s: %d\n", tr.T("tasks"), len(allInteractions))
-	fmt.Printf("%s: %d\n", tr.T("followup_pairs"), len(followups))
+	printConsoleTitle(tr.T("analyze_title"), "======================")
+	fmt.Printf("%s: %s\n", tr.T("user_sessions"), consoleMetric(userSessions))
+	fmt.Printf("%s: %s\n", tr.T("tasks"), consoleMetric(len(allInteractions)))
+	fmt.Printf("%s: %s\n", tr.T("followup_pairs"), consoleMetric(len(followups)))
 	fmt.Printf(
-		"%s: %d\n",
+		"%s: %s\n",
 		tr.T("auto_excluded_judges"),
-		excludedJudgeSessions,
+		consoleMetric(excludedJudgeSessions),
 	)
 	headerDuration := time.Since(headerStarted)
 
@@ -225,14 +224,14 @@ func runAnalyze(args []string) {
 
 	reportBodyStarted := time.Now()
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("judge"))
+	printConsoleSection(tr.T("judge"))
 	fmt.Printf("  %-36s %d\n", tr.T("semantic_cache_hits")+":", semanticAnalysis.Stats.CacheHits)
 	fmt.Printf("  %-36s %d\n", tr.T("semantic_new")+":", semanticAnalysis.Stats.EvaluatedRecords)
 	fmt.Printf("  %-36s %s\n", tr.T("semantic_methodology")+":", semanticAnalysis.Stats.Methodology)
 	fmt.Printf("  %-36s %s / %s\n", tr.T("semantic_model")+":", semanticAnalysis.Stats.Model, semanticAnalysis.Stats.Effort)
 
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("behavior"))
+	printConsoleSection(tr.T("behavior"))
 
 	fmt.Printf(
 		"  %-36s %d\n",
@@ -330,7 +329,7 @@ func printSteeringReasons(
 	})
 
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("steering_reasons"))
+	printConsoleSection(tr.T("steering_reasons"))
 
 	for _, stat := range stats {
 		rate := 100 *
@@ -373,7 +372,7 @@ func printTaskTypes(
 	})
 
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("task_types"))
+	printConsoleSection(tr.T("task_types"))
 
 	for _, stat := range stats {
 		fmt.Printf(
@@ -452,7 +451,7 @@ func printSteeringByTaskType(
 	})
 
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("steering_by_task_type"))
+	printConsoleSection(tr.T("steering_by_task_type"))
 
 	for _, stat := range stats {
 		rate := 100 *

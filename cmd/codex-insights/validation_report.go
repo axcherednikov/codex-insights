@@ -46,9 +46,9 @@ func printValidation(
 	fmt.Println()
 
 	if tr.Language == i18n.Russian {
-		fmt.Println("Каких проверок чаще всего не хватает:")
+		printConsoleSection("Каких проверок чаще всего не хватает")
 	} else {
-		fmt.Println("Most common validation gaps:")
+		printConsoleSection("Most common validation gaps")
 	}
 
 	for _, stat := range stats {

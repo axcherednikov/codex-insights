@@ -47,14 +47,17 @@ func printHistoricalGuard(tr i18n.Translator, options golden.HistoricalOptions, 
 		return
 	}
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("historical_guard"))
+	printConsoleSection(tr.T("historical_guard"))
 	status := tr.T("historical_pass")
+	statusStyle := ansiGreen
 	if guard.Fail() {
 		status = tr.T("historical_fail")
+		statusStyle = ansiRed
 	} else if len(guard.SemanticWarnings) > 0 {
 		status = tr.T("historical_warning")
+		statusStyle = ansiYellow
 	}
-	fmt.Printf("  %s\n", status)
+	fmt.Printf("  %s\n", ansiText(stdoutIsTTY(), statusStyle, status))
 	for _, line := range guard.DeterministicMismatches {
 		line = localizeHistoricalText(tr, line)
 		fmt.Printf("  %s: %s\n", tr.T("historical_deterministic_mismatch"), line)

@@ -17,7 +17,7 @@ type modelRoutingHypothesis struct {
 
 func printEffectiveness(tr i18n.Translator, analysis analyze.EffectivenessAnalysis) {
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("effectiveness"))
+	printConsoleSection(tr.T("effectiveness"))
 	if len(analysis.ModelComparisons) == 0 {
 		fmt.Printf("  %s\n", tr.T("effectiveness_insufficient"))
 	} else {
@@ -34,7 +34,7 @@ func printEffectiveness(tr i18n.Translator, analysis analyze.EffectivenessAnalys
 	}
 
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("subagent_effectiveness"))
+	printConsoleSection(tr.T("subagent_effectiveness"))
 	if len(analysis.SubagentGlobal) == 0 {
 		fmt.Printf("  %s\n", tr.T("effectiveness_insufficient"))
 	} else {
@@ -84,21 +84,21 @@ func printHumanInsights(
 	validation []analyze.ValidationResult,
 ) {
 	fmt.Println()
-	fmt.Printf("%s:\n", tr.T("insights_summary"))
+	printConsoleSection(tr.T("insights_summary"))
 	if effectiveness.Overall.Samples > 0 {
 		fmt.Printf("  %s\n", insightText(tr, "summary", effectiveness.Overall.Samples, 100*steeringRate(effectiveness.Overall)))
 	} else {
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
-	fmt.Printf("%s:\n", tr.T("insights_strengths"))
+	printConsoleSection(tr.T("insights_strengths"))
 	if strength := lowestMeaningfulTaskType(effectiveness.TaskTypeStats); strength != nil {
 		fmt.Printf("  %s\n", insightText(tr, "strength", strength.Stats.Samples, 100*float64(strength.Stats.Steering)/float64(strength.Stats.Samples), tr.TaskType(strength.TaskType)))
 	} else {
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
-	fmt.Printf("%s:\n", tr.T("insights_weaknesses"))
+	printConsoleSection(tr.T("insights_weaknesses"))
 	weaknessPrinted := false
 	if weakness := highestMeaningfulTaskType(effectiveness.TaskTypeStats); weakness != nil {
 		fmt.Printf("  %s\n", insightText(tr, "weakness", weakness.Stats.Samples, 100*float64(weakness.Stats.Steering)/float64(weakness.Stats.Samples), tr.TaskType(weakness.TaskType)))
@@ -112,7 +112,7 @@ func printHumanInsights(
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
-	fmt.Printf("%s:\n", tr.T("insights_high"))
+	printConsoleSection(tr.T("insights_high"))
 	if top := topValidation(validation); top != "" {
 		fmt.Printf("  %s\n", insightText(tr, "validation", tr.ValidationType(top)))
 	} else if top := topReason(reasons); top != "" {
@@ -121,7 +121,7 @@ func printHumanInsights(
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
-	fmt.Printf("%s:\n", tr.T("insights_medium"))
+	printConsoleSection(tr.T("insights_medium"))
 	if top := topPromptQuality(promptQuality); top != "" {
 		fmt.Printf("  %s\n", insightText(tr, "prompt", tr.PromptQualityIssue(top)))
 	} else if top := topAgentsRule(agentsRules); top != "" {
@@ -130,7 +130,7 @@ func printHumanInsights(
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
-	fmt.Printf("%s:\n", tr.T("insights_low"))
+	printConsoleSection(tr.T("insights_low"))
 	lowPrinted := false
 	if len(skillCandidates) > 0 {
 		stats := aggregateSkillCandidates(skillCandidates)

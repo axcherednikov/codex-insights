@@ -52,7 +52,7 @@ func printPrevention(
 
 	if tr.Language == i18n.Russian {
 		fmt.Println()
-		fmt.Println("Как снизить количество корректировок:")
+		printConsoleSection("Как снизить количество корректировок")
 
 		for _, stat := range stats {
 			rate := 100 *
@@ -80,7 +80,7 @@ func printPrevention(
 	}
 
 	fmt.Println()
-	fmt.Println("How to reduce steering:")
+	printConsoleSection("How to reduce steering")
 
 	for _, stat := range stats {
 		rate := 100 *
