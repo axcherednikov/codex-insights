@@ -56,8 +56,42 @@ Judge-backed commands with sensitive session history.
 go install github.com/axcherednikov/codex-insights/cmd/codex-insights@latest
 ```
 
-Make sure the Go binary directory (usually `$(go env GOPATH)/bin`) is on your
-`PATH`.
+Go installs the executable into `GOBIN`, or into `$(go env GOPATH)/bin` when
+`GOBIN` is not configured. Add the default directory to your current shell and
+verify the installation:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+codex-insights --version
+```
+
+To keep the command available in new terminals, add the same `export` line to
+your shell profile, normally `~/.zshrc` on macOS or `~/.bashrc` on Linux.
+
+### Codex CLI for semantic analysis
+
+The `analyze` and `golden evaluate` commands invoke `codex exec`, so they also
+require the Codex CLI to be installed, available on `PATH`, and authenticated.
+On macOS, install it with Homebrew:
+
+```bash
+brew install --cask codex
+```
+
+Alternatively, use the official standalone installer on macOS or Linux:
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+Then start Codex once and complete sign-in:
+
+```bash
+codex
+```
+
+See the [official Codex CLI documentation](https://developers.openai.com/codex/cli)
+for Windows, npm, update, and authentication instructions.
 
 ### Prebuilt binaries
 

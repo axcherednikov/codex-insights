@@ -12,6 +12,7 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/analyze"
 	"github.com/axcherednikov/codex-insights/internal/golden"
 	"github.com/axcherednikov/codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/judge"
 )
 
 const maxGoldenCases = 500
@@ -114,6 +115,9 @@ func runGoldenEvaluate(args []string) error {
 	tr, err := i18n.New(*lang)
 	if err != nil {
 		return err
+	}
+	if err := judge.CheckCLI(); err != nil {
+		return fmt.Errorf("%s", tr.T("codex_cli_missing"))
 	}
 	currentMethodology := golden.Methodology{MethodologyVersion: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion, SchemaVersion: defaults.SchemaVersion}
 	if fixture.Methodology != currentMethodology {
