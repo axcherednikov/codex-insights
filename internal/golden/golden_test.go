@@ -3,6 +3,7 @@ package golden
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,9 @@ func TestWriteUsesRestrictivePermissions(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses inherited ACLs rather than POSIX permission bits")
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("permissions = %o", info.Mode().Perm())

@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Human-reviewed golden fixture export and evaluation workflow.
 - Historical regression guard and deterministic aggregate reporting.
 - Automated tests, cross-platform CI, and release packaging.
+- A `--version` command for identifying installed release binaries.
+- README, license, and changelog files in every release archive.
+
+### Changed
+
+- Updated GitHub Actions to their current Node.js 24-compatible major versions.
+- Documented the Windows ACL behavior for privacy-sensitive output files.
+
+### Fixed
+
+- Kept the restrictive permission regression test meaningful on POSIX systems
+  without failing on Windows, where `FileMode.Perm` does not represent ACLs.
 
 [Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/axcherednikov/codex-insights/releases/tag/v0.1.0

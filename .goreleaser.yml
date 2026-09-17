@@ -16,7 +16,7 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - id: binaries
@@ -30,6 +30,10 @@ archives:
           - zip
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
 
 checksum:
   name_template: checksums.txt

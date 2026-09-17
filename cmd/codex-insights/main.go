@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		runQuick(nil)
@@ -17,6 +19,8 @@ func main() {
 		runQuick(os.Args[2:])
 	case "analyze":
 		runAnalyze(os.Args[2:])
+	case "version", "--version", "-version":
+		fmt.Println(versionLine())
 	case "golden":
 		if len(os.Args) < 3 {
 			printUsage()
@@ -40,6 +44,10 @@ func main() {
 	}
 }
 
+func versionLine() string {
+	return "codex-insights " + version
+}
+
 func printUsage() {
 	fmt.Println("Codex Insights")
 	fmt.Println()
@@ -48,6 +56,7 @@ func printUsage() {
 	fmt.Println("  codex-insights analyze [options]")
 	fmt.Println("  codex-insights golden export [options]")
 	fmt.Println("  codex-insights golden evaluate [options]")
+	fmt.Println("  codex-insights --version")
 }
 
 func fatal(err error) {

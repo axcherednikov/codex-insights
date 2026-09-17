@@ -1,9 +1,23 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestVersionLineIncludesConfiguredVersion(t *testing.T) {
+	original := version
+	version = "0.1.0"
+	t.Cleanup(func() { version = original })
+
+	if got := versionLine(); got != "codex-insights 0.1.0" {
+		t.Fatalf("version line = %q", got)
+	}
+	if strings.Contains(versionLine(), "v0.1.0") {
+		t.Fatal("release version unexpectedly gained a second v prefix")
+	}
+}
 
 func TestTimestampInWindowHonorsSnapshotBounds(t *testing.T) {
 	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
