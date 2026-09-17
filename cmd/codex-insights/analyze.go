@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,7 +33,9 @@ func runAnalyze(args []string) {
 		fatal(err)
 	}
 
-	fs := flag.NewFlagSet("analyze", flag.ExitOnError)
+	flagSet := newAnalyzeFlagSet()
+	fs := flagSet.FlagSet
+	html := flagSet.html
 
 	sessionsPath := fs.String(
 		"sessions",
@@ -151,6 +152,19 @@ func runAnalyze(args []string) {
 				Methodology: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion,
 				SchemaVersion: defaults.SchemaVersion, Model: defaults.Model, Effort: defaults.Effort,
 			})
+		}
+		if err := launchHTMLReportIfRequested(*html, func() error {
+			return serveCurrentHTMLReport(
+				tr,
+				since,
+				before,
+				HTMLReportCounts{UserSessions: userSessions, Tasks: len(allInteractions), FollowupPairs: len(followups)},
+				analyze.SemanticStats{},
+				analyze.EffectivenessAnalysis{},
+				semanticReportResults{},
+			)
+		}); err != nil {
+			fatal(err)
 		}
 		return
 	}
@@ -295,6 +309,19 @@ func runAnalyze(args []string) {
 			aggregation: aggregationDuration, conversion: conversionDuration,
 			report: finalReportDuration(headerDuration, time.Since(reportBodyStarted)),
 		}, semanticAnalysis.Stats)
+	}
+	if err := launchHTMLReportIfRequested(*html, func() error {
+		return serveCurrentHTMLReport(
+			tr,
+			since,
+			before,
+			HTMLReportCounts{UserSessions: userSessions, Tasks: len(allInteractions), FollowupPairs: len(followups)},
+			semanticAnalysis.Stats,
+			effectiveness,
+			converted,
+		)
+	}); err != nil {
+		fatal(err)
 	}
 }
 

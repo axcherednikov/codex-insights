@@ -99,6 +99,19 @@ Run the deeper Judge-backed report:
 codex-insights analyze --days 30
 ```
 
+Generate the deeper report as a local HTML page:
+
+```bash
+codex-insights analyze --days 30 --html
+```
+
+With `--html`, the console report is printed first, then a standalone HTML
+report is written below `temp/reports/<UTC-date-time>/index.html` and served
+from a loopback-only URL. The tool attempts to open that URL in the default
+browser; if it cannot, the URL remains usable and is printed for manual use.
+The server stays running until you press Ctrl+C. Existing report directories
+are retained and `temp/` is ignored by Git.
+
 Select Russian output explicitly:
 
 ```bash
@@ -175,6 +188,14 @@ In addition to the common options, `analyze` supports:
 | `--concurrency` | `6` | Concurrent Judge workers, from 1 to 32. |
 | `--cache` | platform default | Custom semantic cache file. |
 | `--verbose` | `false` | Show timings and methodology metadata. |
+| `--html` | `false` | Write and serve a local HTML report after the console report. |
+
+The HTML report is local-only: it serves over loopback HTTP on `127.0.0.1`,
+makes no external network requests, loads no external assets, and contains
+aggregate counts, semantic labels, and synthetic examples only. It does not
+include prompts, answers, or session text. Report files are created with
+restrictive permissions on Unix-like systems and should still be treated as
+local analysis output.
 
 ### Golden evaluation
 
