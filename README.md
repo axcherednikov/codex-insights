@@ -33,6 +33,9 @@ and other sensitive information.
   review every fixture before sharing or committing it.
 - The persistent semantic cache contains classifications and confidence values,
   not raw conversation text.
+- On Unix-like systems, exported fixtures and cache files are restricted to the
+  current user with mode `0600`. Windows uses the ACL inherited from the chosen
+  directory, so export fixtures only to a private location.
 
 Review the code and your organization's data-handling requirements before using
 Judge-backed commands with sensitive session history.
@@ -108,6 +111,34 @@ Use a non-default session directory:
 codex-insights quick --sessions /path/to/codex/sessions
 ```
 
+Verify the installed version:
+
+```bash
+codex-insights --version
+```
+
+## Example output
+
+The values below are synthetic and do not contain session data:
+
+```text
+Codex Insights Quick
+====================
+Period: last 30 days — 2026-09-17T09:00:00Z
+User sessions: 42
+Tasks: 118
+
+Status:
+  Complete         112
+  Aborted            4
+  Incomplete         2
+
+Completed averages:
+  Tokens:                184320
+  Duration:              96.4 s
+  Tool calls:            12.8
+```
+
 ## Commands
 
 ### `quick`
@@ -157,6 +188,15 @@ codex-insights golden evaluate --fixture approved.json
 
 See [Golden semantic evaluation](docs/golden-evaluation.md) for the review,
 approval, privacy, and evaluation workflow.
+
+### Version
+
+```text
+codex-insights --version
+```
+
+Release binaries report their semantic version. Locally built development
+binaries report `dev` unless a version is supplied at link time.
 
 ## Development
 
