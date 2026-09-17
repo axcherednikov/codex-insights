@@ -1,9 +1,18 @@
 package judge
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestCheckCLIReportsMissingExecutable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	if err := CheckCLI(); !errors.Is(err, ErrCLINotFound) {
+		t.Fatalf("CheckCLI() error = %v, want ErrCLINotFound", err)
+	}
+}
 
 func TestSanitizeStderrKeepsCompactProviderDiagnostic(t *testing.T) {
 	secret := "TOP_SECRET_CONVERSATION_FRAGMENT"

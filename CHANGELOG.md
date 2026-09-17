@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-17
+
+### Changed
+
+- Expanded installation instructions with persistent `PATH` setup and the
+  required Codex CLI installation and sign-in steps.
+
+### Fixed
+
+- Report a localized, actionable error before analysis when the Codex CLI is
+  not available on `PATH`.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
@@ -58,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept the restrictive permission regression test meaningful on POSIX systems
   without failing on Windows, where `FileMode.Perm` does not represent ACLs.
 
-[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/axcherednikov/codex-insights/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/axcherednikov/codex-insights/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/axcherednikov/codex-insights/releases/tag/v0.1.0

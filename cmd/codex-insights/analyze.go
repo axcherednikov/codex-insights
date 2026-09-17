@@ -11,6 +11,7 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/analyze"
 	"github.com/axcherednikov/codex-insights/internal/golden"
 	"github.com/axcherednikov/codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/judge"
 	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
@@ -95,6 +96,9 @@ func runAnalyze(args []string) {
 	tr, err := i18n.New(*lang)
 	if err != nil {
 		fatal(err)
+	}
+	if err := judge.CheckCLI(); err != nil {
+		fatal(fmt.Errorf("%s", tr.T("codex_cli_missing")))
 	}
 
 	before := time.Now().UTC()

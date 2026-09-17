@@ -3,6 +3,7 @@ package judge
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 )
 
 const Marker = "[CODEX_INSIGHTS_JUDGE_V1]"
+
+var ErrCLINotFound = errors.New("Codex CLI not found in PATH")
 
 type Runner struct {
 	Model  string
@@ -25,7 +28,18 @@ func New() Runner {
 	}
 }
 
+func CheckCLI() error {
+	if _, err := exec.LookPath("codex"); err != nil {
+		return ErrCLINotFound
+	}
+	return nil
+}
+
 func (r Runner) Run(prompt string, schema any, result any) error {
+	if err := CheckCLI(); err != nil {
+		return err
+	}
+
 	tmpDir, err := os.MkdirTemp("", "codex-insights-judge-*")
 	if err != nil {
 		return err
