@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 func testFollowups() []sessions.Followup {

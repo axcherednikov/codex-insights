@@ -1,0 +1,180 @@
+# Codex Insights
+
+[![CI](https://github.com/axcherednikov/codex-insights/actions/workflows/ci.yml/badge.svg)](https://github.com/axcherednikov/codex-insights/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/axcherednikov/codex-insights)](https://github.com/axcherednikov/codex-insights/releases)
+[![License](https://img.shields.io/github/license/axcherednikov/codex-insights)](LICENSE)
+
+Codex Insights is a command-line tool for understanding how you use Codex. It
+reads local Codex session history, summarizes workload and model usage, and can
+run a deeper semantic analysis to identify steering, validation gaps, prompt
+quality issues, and opportunities for better project instructions or reusable
+skills.
+
+## Features
+
+- Fast, local-only usage summary with `quick`.
+- Deeper Judge-backed analysis with actionable recommendations.
+- English and Russian reports, selected automatically or with `--lang`.
+- Configurable analysis windows and session locations.
+- Local semantic cache that stores labels rather than raw conversations.
+- Privacy-conscious golden fixture export and regression evaluation.
+
+## Privacy
+
+Codex session history can contain source code, prompts, answers, credentials,
+and other sensitive information.
+
+- `quick` reads session files locally and does not send conversation content to
+  a model.
+- `analyze` sends selected task prompts, final answers, and follow-up messages
+  to the Judge configured by this project through `codex exec`.
+- `golden export` writes minimized, automatically redacted data locally and
+  does not call the Judge. Automatic redaction is not a guarantee of secrecy;
+  review every fixture before sharing or committing it.
+- The persistent semantic cache contains classifications and confidence values,
+  not raw conversation text.
+
+Review the code and your organization's data-handling requirements before using
+Judge-backed commands with sensitive session history.
+
+## Requirements
+
+- macOS, Linux, or Windows.
+- Codex session history, normally stored in `~/.codex/sessions`.
+- Go 1.27 or newer when installing or building from source.
+- For `analyze` and `golden evaluate`: the `codex` CLI installed, available on
+  `PATH`, and authenticated with access to the configured Judge model.
+
+## Installation
+
+### Go install
+
+```bash
+go install github.com/axcherednikov/codex-insights/cmd/codex-insights@latest
+```
+
+Make sure the Go binary directory (usually `$(go env GOPATH)/bin`) is on your
+`PATH`.
+
+### Prebuilt binaries
+
+Download the archive for your operating system and architecture from
+[GitHub Releases](https://github.com/axcherednikov/codex-insights/releases),
+extract it, and move `codex-insights` (or `codex-insights.exe` on Windows) to a
+directory on your `PATH`. Verify the archive with the published
+`checksums.txt` before running it.
+
+### From source
+
+```bash
+git clone https://github.com/axcherednikov/codex-insights.git
+cd codex-insights
+go test ./...
+go build -o codex-insights ./cmd/codex-insights
+```
+
+## Quick start
+
+Run the local report for the last 30 days:
+
+```bash
+codex-insights quick
+```
+
+Running `codex-insights` without a subcommand is equivalent to
+`codex-insights quick`.
+
+Analyze all available history locally:
+
+```bash
+codex-insights quick --days 0
+```
+
+Run the deeper Judge-backed report:
+
+```bash
+codex-insights analyze --days 30
+```
+
+Select Russian output explicitly:
+
+```bash
+codex-insights quick --lang ru
+```
+
+Use a non-default session directory:
+
+```bash
+codex-insights quick --sessions /path/to/codex/sessions
+```
+
+## Commands
+
+### `quick`
+
+Produces a local summary of sessions, tasks, completion statuses, token use,
+duration, tool calls, and model/reasoning combinations.
+
+```text
+codex-insights quick [options]
+```
+
+Common options:
+
+| Option | Default | Description |
+|---|---:|---|
+| `--days` | `30` | Number of days to analyze; `0` means all history. |
+| `--before` | now | Analyze state before an RFC3339 timestamp. |
+| `--sessions` | `~/.codex/sessions` | Session history directory. |
+| `--lang` | `auto` | Report language: `auto`, `en`, or `ru`. |
+
+### `analyze`
+
+Runs the local aggregation plus semantic classification through the Codex CLI.
+The command displays a privacy notice before its first uncached Judge call.
+
+```text
+codex-insights analyze [options]
+```
+
+In addition to the common options, `analyze` supports:
+
+| Option | Default | Description |
+|---|---:|---|
+| `--concurrency` | `6` | Concurrent Judge workers, from 1 to 32. |
+| `--cache` | platform default | Custom semantic cache file. |
+| `--verbose` | `false` | Show timings and methodology metadata. |
+
+### Golden evaluation
+
+Golden fixtures support human-reviewed regression testing of semantic
+classifications:
+
+```bash
+codex-insights golden export --output candidate.json
+codex-insights golden evaluate --fixture approved.json
+```
+
+See [Golden semantic evaluation](docs/golden-evaluation.md) for the review,
+approval, privacy, and evaluation workflow.
+
+## Development
+
+```bash
+gofmt -w path/to/changed.go
+go vet ./...
+go test ./...
+go build ./cmd/codex-insights
+```
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+Security vulnerabilities should be reported according to
+[SECURITY.md](SECURITY.md), not through a public issue.
+
+## Changelog
+
+Release history is available in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+Codex Insights is released under the [MIT License](LICENSE).

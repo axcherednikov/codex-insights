@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	analysiscache "codex-insights/internal/cache"
-	"codex-insights/internal/judge"
-	"codex-insights/internal/sessions"
+	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
+	"github.com/axcherednikov/codex-insights/internal/judge"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 const agentsRulesCacheVersion = "agents-rules-v1"

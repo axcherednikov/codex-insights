@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"codex-insights/internal/analyze"
-	"codex-insights/internal/i18n"
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 type disclosureCheckingRunner struct {

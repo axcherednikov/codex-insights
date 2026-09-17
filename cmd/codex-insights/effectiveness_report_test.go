@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"codex-insights/internal/analyze"
-	"codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
 func TestSummaryUsesJoinedEffectivenessPopulation(t *testing.T) {

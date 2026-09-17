@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"codex-insights/internal/analyze"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
 )
 
 func TestRedactAndCandidateAnonymization(t *testing.T) {

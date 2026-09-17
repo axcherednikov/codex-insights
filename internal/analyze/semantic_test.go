@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	analysiscache "codex-insights/internal/cache"
-	"codex-insights/internal/sessions"
+	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 type semanticFakeRunner struct {

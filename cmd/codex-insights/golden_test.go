@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
 func TestGoldenRussianOutputTranslatesSemanticEnums(t *testing.T) {

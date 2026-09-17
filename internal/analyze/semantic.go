@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	analysiscache "codex-insights/internal/cache"
-	"codex-insights/internal/judge"
-	"codex-insights/internal/sessions"
+	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
+	"github.com/axcherednikov/codex-insights/internal/judge"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 // These versions deliberately have independent lifecycles. Changing the

@@ -8,8 +8,8 @@ import (
 	"sort"
 	"time"
 
-	"codex-insights/internal/i18n"
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 type modelStat struct {

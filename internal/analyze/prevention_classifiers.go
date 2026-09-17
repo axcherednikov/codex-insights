@@ -1,6 +1,6 @@
 package analyze
 
-import "codex-insights/internal/sessions"
+import "github.com/axcherednikov/codex-insights/internal/sessions"
 
 type followupJudgeRecord struct {
 	PreviousTurnID string `json:"previous_turn_id"`

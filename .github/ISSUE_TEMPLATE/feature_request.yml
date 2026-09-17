@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose an improvement to Codex Insights.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What limitation or workflow problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior and CLI interface.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or alternative designs.
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and compatibility impact
+      description: Note effects on session data, Judge calls, cache formats, or existing CLI output.

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"codex-insights/internal/analyze"
-	"codex-insights/internal/golden"
-	"codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
+	"github.com/axcherednikov/codex-insights/internal/golden"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
 const maxGoldenCases = 500

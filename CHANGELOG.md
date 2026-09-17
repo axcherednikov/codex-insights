@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-09-17
+
+### Added
+
+- Local summaries of Codex sessions, task outcomes, token usage, duration, tool
+  calls, and model/reasoning combinations.
+- Judge-backed semantic analysis of follow-ups, steering, prompt quality,
+  validation gaps, task types, project rules, and reusable skill candidates.
+- English and Russian report localization.
+- Privacy-preserving semantic cache containing classifications rather than raw
+  conversation text.
+- Human-reviewed golden fixture export and evaluation workflow.
+- Historical regression guard and deterministic aggregate reporting.
+- Automated tests, cross-platform CI, and release packaging.
+
+[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/axcherednikov/codex-insights/releases/tag/v0.1.0

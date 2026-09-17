@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"codex-insights/internal/analyze"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
 )
 
 func TestAggregateRecommendationsAreDeterministic(t *testing.T) {

@@ -3,7 +3,7 @@ package analyze
 import (
 	"sort"
 
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 // MinimumCohortSize is the smallest cohort from which this report will make a

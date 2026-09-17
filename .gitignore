@@ -1,0 +1,20 @@
+# Build output
+/codex-insights
+/codex-insights.exe
+/dist/
+*.test
+*.out
+
+# Local and generated data
+*.log
+coverage.*
+candidate.json
+approved.json
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

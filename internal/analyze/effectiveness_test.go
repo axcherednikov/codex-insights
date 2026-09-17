@@ -3,7 +3,7 @@ package analyze
 import (
 	"testing"
 
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 func TestAggregateEffectivenessJoinsCompletedPriorTurnsAndAverages(t *testing.T) {

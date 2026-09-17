@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"codex-insights/internal/analyze"
-	analysiscache "codex-insights/internal/cache"
-	"codex-insights/internal/i18n"
-	"codex-insights/internal/sessions"
+	"github.com/axcherednikov/codex-insights/internal/analyze"
+	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
+	"github.com/axcherednikov/codex-insights/internal/i18n"
+	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
 type semanticReportResults struct {
