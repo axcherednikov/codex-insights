@@ -10,6 +10,7 @@
 coverage.*
 candidate.json
 approved.json
+/temp/
 
 # Editors and operating systems
 .DS_Store
