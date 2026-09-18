@@ -60,17 +60,7 @@ func (r Runner) Run(prompt string, schema any, result any) error {
 
 	fullPrompt := Marker + "\n\n" + prompt
 
-	cmd := exec.Command(
-		"codex",
-		"exec",
-		"-m", r.Model,
-		"-c", fmt.Sprintf(`model_reasoning_effort="%s"`, r.Effort),
-		"-s", "read-only",
-		"--skip-git-repo-check",
-		"--output-schema", schemaPath,
-		"-o", outputPath,
-		"-",
-	)
+	cmd := r.command(schemaPath, outputPath)
 
 	cmd.Stdin = bytes.NewBufferString(fullPrompt)
 	cmd.Stdout = io.Discard
@@ -92,6 +82,21 @@ func (r Runner) Run(prompt string, schema any, result any) error {
 	}
 
 	return nil
+}
+
+func (r Runner) command(schemaPath, outputPath string) *exec.Cmd {
+	return exec.Command(
+		"codex",
+		"exec",
+		"--ephemeral",
+		"-m", r.Model,
+		"-c", fmt.Sprintf(`model_reasoning_effort="%s"`, r.Effort),
+		"-s", "read-only",
+		"--skip-git-repo-check",
+		"--output-schema", schemaPath,
+		"-o", outputPath,
+		"-",
+	)
 }
 
 const privateStderrMessage = "stderr omitted for privacy"

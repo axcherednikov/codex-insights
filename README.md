@@ -27,7 +27,8 @@ and other sensitive information.
 - `quick` reads session files locally and does not send conversation content to
   a model.
 - `analyze` sends selected task prompts, final answers, and follow-up messages
-  to the Judge configured by this project through `codex exec`.
+  to the Judge configured by this project through `codex exec`. Judge runs use
+  `--ephemeral`, so the Codex CLI does not persist their session rollout files.
 - `golden export` writes minimized, automatically redacted data locally and
   does not call the Judge. Automatic redaction is not a guarantee of secrecy;
   review every fixture before sharing or committing it.
@@ -46,7 +47,8 @@ Judge-backed commands with sensitive session history.
 - Codex session history, normally stored in `~/.codex/sessions`.
 - Go 1.27 or newer when installing or building from source.
 - For `analyze` and `golden evaluate`: the `codex` CLI installed, available on
-  `PATH`, and authenticated with access to the configured Judge model.
+  `PATH`, authenticated with access to the configured Judge model, and recent
+  enough to support `codex exec --ephemeral`.
 
 ## Installation
 
