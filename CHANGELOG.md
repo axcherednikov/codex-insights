@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Run Judge-backed analysis with `codex exec --ephemeral` so prompts, answers,
+  and follow-ups are not persisted as Codex session rollout files.
+
 ## [0.2.1] - 2026-09-17
 
 ### Changed

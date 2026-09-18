@@ -2,6 +2,7 @@ package judge
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,27 @@ func TestCheckCLIReportsMissingExecutable(t *testing.T) {
 
 	if err := CheckCLI(); !errors.Is(err, ErrCLINotFound) {
 		t.Fatalf("CheckCLI() error = %v, want ErrCLINotFound", err)
+	}
+}
+
+func TestRunnerCommandUsesEphemeralSession(t *testing.T) {
+	runner := Runner{Model: "judge-model", Effort: "high"}
+	cmd := runner.command("schema.json", "result.json")
+
+	want := []string{
+		"codex",
+		"exec",
+		"--ephemeral",
+		"-m", "judge-model",
+		"-c", `model_reasoning_effort="high"`,
+		"-s", "read-only",
+		"--skip-git-repo-check",
+		"--output-schema", "schema.json",
+		"-o", "result.json",
+		"-",
+	}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("command arguments = %#v, want %#v", cmd.Args, want)
 	}
 }
 
