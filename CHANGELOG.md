@@ -7,17 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-05
+
+### Added
+
+- Strict `golangci-lint` checks in CI using the repository configuration.
+
+### Changed
+
+- Default reports to English while retaining explicit `--lang auto` locale
+  detection and `--lang ru` Russian output.
+- Advance the semantic methodology and Judge prompt to version 2. Existing
+  semantic cache entries are not reused, and the first deep analysis recomputes
+  classifications. The result schema remains unchanged.
+- Report that historical semantic and follow-up reference metrics need
+  recalibration for the new methodology while retaining strict checks for
+  unaffected task counts, statuses, and averages.
+
 ### Fixed
 
 - Propagate local report output and resource failures, and prevent Judge calls
   when the required privacy disclosure cannot be written.
-- Default reports to English while retaining explicit `--lang auto` locale
-  detection and `--lang ru` Russian output.
 - Bound semantic Judge requests by serialized size, truncate exceptionally long
   text fields, and split unexpected oversized batches instead of aborting the
   full analysis.
 - Build follow-up pairs only from adjacent completed interactions so aborted
   or incomplete tasks cannot create false semantic steering relationships.
+- Serve local HTML reports while the browser opens, cancel pending browser
+  launches on server failure, and close idle connections during shutdown.
+- Preserve analysis cancellation and propagate resource cleanup failures.
+- Check file permission semantics correctly on Windows while retaining exact
+  restrictive permission checks on Unix-like systems.
 
 ### Security
 
@@ -87,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept the restrictive permission regression test meaningful on POSIX systems
   without failing on Windows, where `FileMode.Perm` does not represent ACLs.
 
-[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/axcherednikov/codex-insights/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/axcherednikov/codex-insights/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/axcherednikov/codex-insights/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/axcherednikov/codex-insights/releases/tag/v0.1.0
