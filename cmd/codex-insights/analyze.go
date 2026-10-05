@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,27 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
-const maxSemanticConcurrency = 32
+const (
+	minimumSemanticConcurrency = 1
+	maxSemanticConcurrency     = 32
+	defaultAnalysisDays        = 30
+	percentageScale            = 100
+	subagentCohortCount        = 2
+)
+
+const (
+	semanticSpinnerFrameFirst = iota
+	semanticSpinnerFrameSecond
+	semanticSpinnerFrameThird
+	semanticSpinnerFrameFourth
+	semanticSpinnerFrameFifth
+	semanticSpinnerFrameSixth
+	semanticSpinnerFrameSeventh
+	semanticSpinnerFrameEighth
+	semanticSpinnerFrameNinth
+	semanticSpinnerFrameTenth
+	semanticSpinnerFrameCount = semanticSpinnerFrameTenth + 1
+)
 
 type taskBehaviorStat struct {
 	Type      string
@@ -28,10 +49,23 @@ type namedCount struct {
 	Count int
 }
 
-func runAnalyze(args []string) {
+type analyzeRunOptions struct {
+	sessionsPath            string
+	days                    int
+	before                  time.Time
+	since                   time.Time
+	legacyExcludeOriginator string
+	concurrency             int
+	cachePath               string
+	verbose                 bool
+	html                    bool
+	translator              i18n.Translator
+}
+
+func parseAnalyzeOptions(args []string) (analyzeRunOptions, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fatal(err)
+		return analyzeRunOptions{}, fmt.Errorf("resolve user home for analysis: %w", err)
 	}
 
 	flagSet := newAnalyzeFlagSet()
@@ -46,7 +80,7 @@ func runAnalyze(args []string) {
 
 	days := fs.Int(
 		"days",
-		30,
+		defaultAnalysisDays,
 		"number of days to analyze; 0 means all history",
 	)
 
@@ -87,18 +121,18 @@ func runAnalyze(args []string) {
 	)
 
 	if err := fs.Parse(args); err != nil {
-		fatal(err)
+		return analyzeRunOptions{}, fmt.Errorf("parse analyze flags: %w", err)
 	}
 	if err := validateSemanticConcurrency(*concurrency); err != nil {
-		fatal(err)
+		return analyzeRunOptions{}, err
 	}
 
 	tr, err := i18n.New(*lang)
 	if err != nil {
-		fatal(err)
+		return analyzeRunOptions{}, fmt.Errorf("resolve report language: %w", err)
 	}
 	if err := judge.CheckCLI(); err != nil {
-		fatal(fmt.Errorf("%s", tr.T("codex_cli_missing")))
+		return analyzeRunOptions{}, localizedCLIError{message: tr.T("codex_cli_missing"), cause: err}
 	}
 
 	before := time.Now().UTC()
@@ -106,7 +140,7 @@ func runAnalyze(args []string) {
 	if *beforeRaw != "" {
 		parsed, err := time.Parse(time.RFC3339, *beforeRaw)
 		if err != nil {
-			fatal(fmt.Errorf("invalid --before: %w", err))
+			return analyzeRunOptions{}, fmt.Errorf("invalid --before: %w", err)
 		}
 
 		before = parsed
@@ -118,14 +152,36 @@ func runAnalyze(args []string) {
 		since = before.Add(-time.Duration(*days) * 24 * time.Hour)
 	}
 
+	return analyzeRunOptions{
+		sessionsPath: *sessionsPath, days: *days, before: before, since: since,
+		legacyExcludeOriginator: *legacyExcludeOriginator, concurrency: *concurrency,
+		cachePath: *cachePath, verbose: *verbose, html: *html, translator: tr,
+	}, nil
+}
+
+func runAnalyze(args []string) {
+	options, err := parseAnalyzeOptions(args)
+	if err != nil {
+		fatal(err)
+	}
+	tr := options.translator
+	before := options.before
+	since := options.since
+	days := options.days
+	legacyExcludeOriginator := options.legacyExcludeOriginator
+	verbose := options.verbose
+	html := options.html
+	concurrency := options.concurrency
+	cachePath := options.cachePath
+
 	discoveryStarted := time.Now()
-	files, err := sessions.FindRollouts(*sessionsPath)
+	files, err := sessions.FindRollouts(options.sessionsPath)
 	if err != nil {
 		fatal(err)
 	}
 	discoveryDuration := time.Since(discoveryStarted)
 	parsingStarted := time.Now()
-	collected := collectSessionFiles(files, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator})
+	collected := collectSessionFiles(files, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: legacyExcludeOriginator})
 	allInteractions := collected.Interactions
 	allTurns := collected.Turns
 	followups := collected.Followups
@@ -146,72 +202,23 @@ func runAnalyze(args []string) {
 	headerDuration := time.Since(headerStarted)
 
 	if len(followups) == 0 {
-		reportBodyStarted := time.Now()
-		fmt.Println(tr.T("nothing_to_analyze"))
-		printHumanInsights(tr, analyze.EffectivenessAnalysis{}, nil, nil, nil, nil, nil, nil, nil)
-		printHistoricalGuard(tr, golden.HistoricalOptions{Days: *days, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator}, allInteractions, allTurns, followups, nil)
-		if *verbose {
-			defaults := analyze.DefaultSemanticConfig()
-			printSemanticTimings(tr, analysisTimings{discovery: discoveryDuration, parsing: parsingDuration, report: finalReportDuration(headerDuration, time.Since(reportBodyStarted))}, analyze.SemanticStats{
-				Methodology: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion,
-				SchemaVersion: defaults.SchemaVersion, Model: defaults.Model, Effort: defaults.Effort,
-			})
-		}
-		if err := launchHTMLReportIfRequested(*html, func() error {
-			return serveCurrentHTMLReport(
-				tr,
-				since,
-				before,
-				HTMLReportCounts{UserSessions: userSessions, Tasks: len(allInteractions), FollowupPairs: len(followups)},
-				analyze.SemanticStats{},
-				analyze.EffectivenessAnalysis{},
-				semanticReportResults{},
-			)
-		}); err != nil {
+		if err := reportAnalyzeWithoutFollowups(options, collected, discoveryDuration, parsingDuration, headerDuration); err != nil {
 			fatal(err)
 		}
+
 		return
 	}
 
 	fmt.Println()
-	store, err := newSemanticCache(*cachePath)
+	execution, err := executeSemanticAnalysis(tr, cachePath, concurrency, allInteractions, followups)
 	if err != nil {
 		fatal(err)
 	}
-	config := analyze.DefaultSemanticConfig()
-	config.Cache = store
-	config.Workers = *concurrency
-	renderer := newSemanticProgressRenderer(tr, os.Stdout, stdoutIsTTY())
-	var progressMu sync.Mutex
-	var firstProgress bool
-	var cacheLookupDuration time.Duration
-	config.Progress = func(progress analyze.SemanticProgress) {
-		progressMu.Lock()
-		defer progressMu.Unlock()
-		if !firstProgress {
-			firstProgress = true
-			cacheLookupDuration = progress.Elapsed
-		}
-		renderer.Update(progress)
-	}
-	semanticAnalysis, err := analyze.NewSemanticEngine(config).AnalyzeInteractions(allInteractions, followups)
-	if err != nil {
-		renderer.Finish()
-		fatal(err)
-	}
-	renderer.Finish()
-	semanticDuration := semanticAnalysis.Stats.Elapsed
-	judgeDuration := semanticDuration - cacheLookupDuration
-	if judgeDuration < 0 {
-		judgeDuration = 0
-	}
-
-	conversionStarted := time.Now()
-	converted, err := convertSemanticAnalysis(semanticAnalysis, followups)
-	if err != nil {
-		fatal(err)
-	}
-	conversionDuration := time.Since(conversionStarted)
+	semanticAnalysis := execution.analysis
+	converted := execution.report
+	cacheLookupDuration := execution.cacheLookupDuration
+	judgeDuration := execution.judgeDuration
+	conversionDuration := execution.conversionDuration
 
 	aggregationStarted := time.Now()
 	effectiveness := analyze.AggregateEffectiveness(
@@ -235,7 +242,7 @@ func runAnalyze(args []string) {
 	}
 
 	steeringCount := behaviorCounts["steering"]
-	steeringRate := 100 *
+	steeringRate := percentageScale *
 		float64(steeringCount) /
 		float64(len(steeringResults))
 	aggregationDuration := time.Since(aggregationStarted)
@@ -305,8 +312,8 @@ func runAnalyze(args []string) {
 		skillCandidatesResults,
 		validationResults,
 	)
-	printHistoricalGuard(tr, golden.HistoricalOptions{Days: *days, Before: before, LegacyExcludeOriginator: *legacyExcludeOriginator}, allInteractions, allTurns, followups, semanticAnalysis.Results)
-	if *verbose {
+	printHistoricalGuard(tr, golden.HistoricalOptions{Days: days, Before: before, LegacyExcludeOriginator: legacyExcludeOriginator}, allInteractions, allTurns, followups, semanticAnalysis.Results)
+	if verbose {
 		printSemanticTimings(tr, analysisTimings{
 			discovery: discoveryDuration, parsing: parsingDuration,
 			cacheLookup: cacheLookupDuration, judge: judgeDuration,
@@ -314,7 +321,7 @@ func runAnalyze(args []string) {
 			report: finalReportDuration(headerDuration, time.Since(reportBodyStarted)),
 		}, semanticAnalysis.Stats)
 	}
-	if err := launchHTMLReportIfRequested(*html, func() error {
+	if err := launchHTMLReportIfRequested(html, func() error {
 		return serveCurrentHTMLReport(
 			tr,
 			since,
@@ -327,6 +334,94 @@ func runAnalyze(args []string) {
 	}); err != nil {
 		fatal(err)
 	}
+}
+
+type semanticExecution struct {
+	analysis            analyze.SemanticAnalysis
+	report              semanticReportResults
+	cacheLookupDuration time.Duration
+	judgeDuration       time.Duration
+	conversionDuration  time.Duration
+}
+
+func executeSemanticAnalysis(
+	translator i18n.Translator,
+	cachePath string,
+	concurrency int,
+	interactions []sessions.Interaction,
+	followups []sessions.Followup,
+) (semanticExecution, error) {
+	store, err := newSemanticCache(cachePath)
+	if err != nil {
+		return semanticExecution{}, err
+	}
+	config := analyze.DefaultSemanticConfig()
+	config.Cache = store
+	config.Workers = concurrency
+	renderer := newSemanticProgressRenderer(translator, os.Stdout, stdoutIsTTY())
+	config.Runner = progressGuardRunner{runner: config.Runner, renderer: renderer}
+	var progressMu sync.Mutex
+	var firstProgress bool
+	var cacheLookupDuration time.Duration
+	config.Progress = func(progress analyze.SemanticProgress) {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if !firstProgress {
+			firstProgress = true
+			cacheLookupDuration = progress.Elapsed
+		}
+		renderer.Update(progress)
+	}
+	analysisResult, analysisErr := analyze.NewSemanticEngine(config).AnalyzeInteractions(interactions, followups)
+	finishErr := renderer.Finish()
+	if analysisErr != nil {
+		analysisErr = fmt.Errorf("analyze semantic inputs: %w", analysisErr)
+	}
+	if finishErr != nil {
+		finishErr = fmt.Errorf("finish semantic progress: %w", finishErr)
+	}
+	if err := errors.Join(analysisErr, finishErr); err != nil {
+		return semanticExecution{}, err
+	}
+	conversionStarted := time.Now()
+	converted, err := convertSemanticAnalysis(analysisResult, followups)
+	if err != nil {
+		return semanticExecution{}, fmt.Errorf("convert semantic analysis for reports: %w", err)
+	}
+	semanticDuration := analysisResult.Stats.Elapsed
+	judgeDuration := semanticDuration - cacheLookupDuration
+	if judgeDuration < 0 {
+		judgeDuration = 0
+	}
+
+	return semanticExecution{
+		analysis: analysisResult, report: converted,
+		cacheLookupDuration: cacheLookupDuration, judgeDuration: judgeDuration,
+		conversionDuration: time.Since(conversionStarted),
+	}, nil
+}
+
+func reportAnalyzeWithoutFollowups(options analyzeRunOptions, collected collectedSessions, discovery, parsing, header time.Duration) error {
+	tr := options.translator
+	started := time.Now()
+	fmt.Println(tr.T("nothing_to_analyze"))
+	printHumanInsights(tr, analyze.EffectivenessAnalysis{}, nil, nil, nil, nil, nil, nil, nil)
+	printHistoricalGuard(tr, golden.HistoricalOptions{Days: options.days, Before: options.before, LegacyExcludeOriginator: options.legacyExcludeOriginator}, collected.Interactions, collected.Turns, collected.Followups, nil)
+	if options.verbose {
+		defaults := analyze.DefaultSemanticConfig()
+		printSemanticTimings(tr, analysisTimings{discovery: discovery, parsing: parsing, report: finalReportDuration(header, time.Since(started))}, analyze.SemanticStats{
+			Methodology: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion,
+			SchemaVersion: defaults.SchemaVersion, Model: defaults.Model, Effort: defaults.Effort,
+		})
+	}
+
+	return launchHTMLReportIfRequested(options.html, func() error {
+		return serveCurrentHTMLReport(
+			tr, options.since, options.before,
+			HTMLReportCounts{UserSessions: collected.UserSessions, Tasks: len(collected.Interactions), FollowupPairs: len(collected.Followups)},
+			analyze.SemanticStats{}, analyze.EffectivenessAnalysis{}, semanticReportResults{},
+		)
+	})
 }
 
 func printSteeringReasons(
@@ -356,6 +451,7 @@ func printSteeringReasons(
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Name < stats[j].Name
 	})
 
@@ -363,7 +459,7 @@ func printSteeringReasons(
 	printConsoleSection(tr.T("steering_reasons"))
 
 	for _, stat := range stats {
-		rate := 100 *
+		rate := percentageScale *
 			float64(stat.Count) /
 			float64(len(results))
 
@@ -399,6 +495,7 @@ func printTaskTypes(
 		if stats[i].Followups != stats[j].Followups {
 			return stats[i].Followups > stats[j].Followups
 		}
+
 		return stats[i].Type < stats[j].Type
 	})
 
@@ -478,6 +575,7 @@ func printSteeringByTaskType(
 		if leftRate != rightRate {
 			return leftRate > rightRate
 		}
+
 		return stats[i].Type < stats[j].Type
 	})
 
@@ -485,7 +583,7 @@ func printSteeringByTaskType(
 	printConsoleSection(tr.T("steering_by_task_type"))
 
 	for _, stat := range stats {
-		rate := 100 *
+		rate := percentageScale *
 			float64(stat.Steering) /
 			float64(stat.Followups)
 
@@ -542,5 +640,6 @@ func filterTurns(input []sessions.Turn, since time.Time, before time.Time) []ses
 		}
 		result = append(result, turn)
 	}
+
 	return result
 }

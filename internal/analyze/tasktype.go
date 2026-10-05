@@ -13,6 +13,8 @@ import (
 
 const taskTypeCacheVersion = "task-type-v1"
 
+const taskTypeBatchSize = 25
+
 type TaskTypeResult struct {
 	TurnID     string  `json:"turn_id"`
 	Type       string  `json:"type"`
@@ -38,13 +40,13 @@ type TaskTypeAnalyzer struct {
 func NewTaskTypeAnalyzer() (TaskTypeAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return TaskTypeAnalyzer{}, err
+		return TaskTypeAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
 
 	return TaskTypeAnalyzer{
 		runner:    judge.New(),
 		cache:     store,
-		batchSize: 25,
+		batchSize: taskTypeBatchSize,
 	}, nil
 }
 
@@ -65,27 +67,64 @@ func (a TaskTypeAnalyzer) Analyze(
 		Results: make([]TaskTypeResult, 0, len(tasks)),
 	}
 
-	resultsByTurn := make(
-		map[string]TaskTypeResult,
-		len(tasks),
-	)
+	resultsByTurn, pending, cacheHits := a.selectPending(tasks)
+	analysis.CacheHits = cacheHits
 
-	pending := make([]sessions.Interaction, 0, len(tasks))
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return TaskTypeAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
 
-	for _, task := range tasks {
+	analysis.Results, err = assembleTaskTypeAnalysis(tasks, resultsByTurn)
+	if err != nil {
+		return TaskTypeAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a TaskTypeAnalyzer) selectPending(
+	cases []sessions.Interaction,
+) (map[string]TaskTypeResult, []sessions.Interaction, int) {
+	resultsByTurn := make(map[string]TaskTypeResult, len(cases))
+	pending := make([]sessions.Interaction, 0, len(cases))
+	cacheHits := 0
+	for _, task := range cases {
 		var cached TaskTypeResult
-
-		if a.cache != nil &&
-			a.cache.Get(taskTypeCacheKey(task), &cached) &&
-			cached.TurnID == task.TurnID {
-
+		if a.cache != nil && a.cache.Get(taskTypeCacheKey(task), &cached) && cached.TurnID == task.TurnID {
 			resultsByTurn[task.TurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
-
 		pending = append(pending, task)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assembleTaskTypeAnalysis(
+	cases []sessions.Interaction,
+	resultsByTurn map[string]TaskTypeResult,
+) ([]TaskTypeResult, error) {
+	results := make([]TaskTypeResult, 0, len(cases))
+	for _, task := range cases {
+		result, ok := resultsByTurn[task.TurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingTaskTypeResult, task.TurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a TaskTypeAnalyzer) evaluatePending(
+	pending []sessions.Interaction,
+	resultsByTurn map[string]TaskTypeResult,
+) (int, error) {
+	var evaluated int
 
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
@@ -97,7 +136,7 @@ func (a TaskTypeAnalyzer) Analyze(
 
 		batchResults, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return TaskTypeAnalysis{}, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"analyze task type batch %d-%d: %w",
 				start,
 				end,
@@ -105,7 +144,7 @@ func (a TaskTypeAnalyzer) Analyze(
 			)
 		}
 
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 
 		for _, result := range batchResults {
 			resultsByTurn[result.TurnID] = result
@@ -122,29 +161,17 @@ func (a TaskTypeAnalyzer) Analyze(
 					taskTypeCacheKey(task),
 					result,
 				); err != nil {
-					return TaskTypeAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 
 			if err := a.cache.Save(); err != nil {
-				return TaskTypeAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
 
-	for _, task := range tasks {
-		result, ok := resultsByTurn[task.TurnID]
-		if !ok {
-			return TaskTypeAnalysis{}, fmt.Errorf(
-				"missing task type result for turn %q",
-				task.TurnID,
-			)
-		}
-
-		analysis.Results = append(analysis.Results, result)
-	}
-
-	return analysis, nil
+	return evaluated, nil
 }
 
 func (a TaskTypeAnalyzer) analyzeBatch(
@@ -164,10 +191,8 @@ func (a TaskTypeAnalyzer) analyzeBatch(
 		})
 	}
 
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal tasks: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 
 	prompt := `Classify every task into exactly one category.
 
@@ -197,7 +222,7 @@ Tasks:
 		taskTypeSchema(),
 		&response,
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 
 	if err := validateTaskTypeResults(
@@ -224,35 +249,22 @@ func validateTaskTypeResults(
 
 	for _, result := range results {
 		if _, ok := expected[result.TurnID]; !ok {
-			return fmt.Errorf(
-				"judge returned unexpected turn id %q",
-				result.TurnID,
-			)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.TurnID)
 		}
 
 		if _, duplicate := seen[result.TurnID]; duplicate {
-			return fmt.Errorf(
-				"judge returned duplicate turn id %q",
-				result.TurnID,
-			)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.TurnID)
 		}
 
 		if !isTaskType(result.Type) {
-			return fmt.Errorf(
-				"judge returned unsupported task type %q",
-				result.Type,
-			)
+			return fmt.Errorf("%w %q", errUnsupportedTaskType, result.Type)
 		}
 
 		seen[result.TurnID] = struct{}{}
 	}
 
 	if len(seen) != len(expected) {
-		return fmt.Errorf(
-			"judge returned %d results, expected %d",
-			len(seen),
-			len(expected),
-		)
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
 
 	return nil

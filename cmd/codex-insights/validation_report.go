@@ -40,6 +40,7 @@ func printValidation(
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Type < stats[j].Type
 	})
 
@@ -52,7 +53,7 @@ func printValidation(
 	}
 
 	for _, stat := range stats {
-		rate := 100 *
+		rate := percentageScale *
 			float64(stat.Count) /
 			float64(len(results))
 

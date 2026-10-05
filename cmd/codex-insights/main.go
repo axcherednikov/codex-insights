@@ -6,13 +6,20 @@ import (
 	"time"
 )
 
-const defaultReportLanguage = "en"
+const (
+	defaultReportLanguage      = "en"
+	secondsPerMillisecond      = 1000
+	quickDefaultDays           = 30
+	minimumCLIArgumentCount    = 2
+	minimumGoldenArgumentCount = 3
+)
 
 var version = "dev"
 
 func main() {
-	if len(os.Args) < 2 {
+	if len(os.Args) < minimumCLIArgumentCount {
 		runQuick(nil)
+
 		return
 	}
 
@@ -24,8 +31,9 @@ func main() {
 	case "version", "--version", "-version":
 		fmt.Println(versionLine())
 	case "golden":
-		if len(os.Args) < 3 {
+		if len(os.Args) < minimumGoldenArgumentCount {
 			printUsage()
+
 			return
 		}
 		var err error
@@ -36,6 +44,7 @@ func main() {
 			err = runGoldenEvaluate(os.Args[3:])
 		default:
 			printUsage()
+
 			return
 		}
 		if err != nil {
@@ -71,5 +80,6 @@ func timestampInWindow(raw string, since time.Time, before time.Time) bool {
 	if err != nil || startedAt.After(before) {
 		return false
 	}
+
 	return since.IsZero() || !startedAt.Before(since)
 }

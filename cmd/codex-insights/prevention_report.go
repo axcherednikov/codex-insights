@@ -47,6 +47,7 @@ func printPrevention(
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Name < stats[j].Name
 	})
 
@@ -55,7 +56,7 @@ func printPrevention(
 		printConsoleSection("Как снизить количество корректировок")
 
 		for _, stat := range stats {
-			rate := 100 *
+			rate := percentageScale *
 				float64(stat.Count) /
 				float64(len(results))
 
@@ -72,7 +73,7 @@ func printPrevention(
 				"  %-30s %4d  %5.1f%%\n",
 				"Нет устойчивого способа",
 				notPreventable,
-				100*float64(notPreventable)/float64(len(results)),
+				percentageScale*float64(notPreventable)/float64(len(results)),
 			)
 		}
 
@@ -83,7 +84,7 @@ func printPrevention(
 	printConsoleSection("How to reduce steering")
 
 	for _, stat := range stats {
-		rate := 100 *
+		rate := percentageScale *
 			float64(stat.Count) /
 			float64(len(results))
 
@@ -100,7 +101,7 @@ func printPrevention(
 			"  %-30s %4d  %5.1f%%\n",
 			"Not consistently preventable",
 			notPreventable,
-			100*float64(notPreventable)/float64(len(results)),
+			percentageScale*float64(notPreventable)/float64(len(results)),
 		)
 	}
 }

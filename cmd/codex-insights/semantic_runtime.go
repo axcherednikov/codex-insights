@@ -25,18 +25,31 @@ type semanticReportResults struct {
 	validation      []analyze.ValidationResult
 }
 
+const semanticProgressHeartbeatInterval = 200 * time.Millisecond
+
 func validateSemanticConcurrency(value int) error {
-	if value < 1 || value > maxSemanticConcurrency {
-		return fmt.Errorf("invalid --concurrency %d; must be between 1 and %d", value, maxSemanticConcurrency)
+	if value < minimumSemanticConcurrency || value > maxSemanticConcurrency {
+		return cliValueRangeError{option: "--concurrency", value: value, minimum: minimumSemanticConcurrency, maximum: maxSemanticConcurrency, identity: errInvalidConcurrency}
 	}
+
 	return nil
 }
 
 func newSemanticCache(path string) (*analysiscache.Store, error) {
 	if path == "" {
-		return analysiscache.NewDefault()
+		store, err := analysiscache.NewDefault()
+		if err != nil {
+			return nil, fmt.Errorf("create default semantic cache: %w", err)
+		}
+
+		return store, nil
 	}
-	return analysiscache.New(path)
+	store, err := analysiscache.New(path)
+	if err != nil {
+		return nil, fmt.Errorf("create semantic cache: %w", err)
+	}
+
+	return store, nil
 }
 
 // convertSemanticAnalysis keeps the report layer's established result types
@@ -49,47 +62,56 @@ func convertSemanticAnalysis(analysisResult analyze.SemanticAnalysis, followups 
 	wantedFollowups := make(map[string]struct{}, len(followups))
 	for _, followup := range followups {
 		if _, duplicate := wantedFollowups[followup.PreviousTurnID]; duplicate {
-			return semanticReportResults{}, fmt.Errorf("duplicate explicit follow-up for turn %q", followup.PreviousTurnID)
+			return semanticReportResults{}, followupRecordError{identity: errDuplicateFollowup, turnID: followup.PreviousTurnID}
 		}
 		wantedFollowups[followup.PreviousTurnID] = struct{}{}
 	}
 	semanticByTurn := make(map[string]analyze.SemanticResult, len(analysisResult.Results))
 	for _, semantic := range analysisResult.Results {
 		semanticByTurn[semantic.TurnID] = semantic
-		if taskType, ok := semantic.ToTaskTypeResultIfAvailable(); ok {
-			result.taskTypes = append(result.taskTypes, taskType)
-		}
+		appendSemanticLabels(&result, semantic)
 	}
 	for _, followup := range followups {
 		semantic, ok := semanticByTurn[followup.PreviousTurnID]
 		if !ok {
-			return semanticReportResults{}, fmt.Errorf("missing semantic result for explicit follow-up %q", followup.PreviousTurnID)
+			return semanticReportResults{}, followupRecordError{identity: errMissingSemanticResult, turnID: followup.PreviousTurnID}
 		}
 		steering, ok := semantic.ToSteeringResult()
 		if !ok {
-			return semanticReportResults{}, fmt.Errorf("missing steering result for explicit follow-up %q", followup.PreviousTurnID)
+			return semanticReportResults{}, followupRecordError{identity: errMissingSteeringResult, turnID: followup.PreviousTurnID}
 		}
 		result.steering = append(result.steering, steering)
-		if item, ok := semantic.ToSteeringReasonResult(); ok {
-			result.reasons = append(result.reasons, item)
-		}
-		if item, ok := semantic.ToPreventionResult(); ok {
-			result.prevention = append(result.prevention, item)
-		}
-		if item, ok := semantic.ToPromptQualityResult(); ok {
-			result.promptQuality = append(result.promptQuality, item)
-		}
-		if item, ok := semantic.ToAgentsRuleResult(); ok {
-			result.agentsRules = append(result.agentsRules, item)
-		}
-		if item, ok := semantic.ToSkillCandidateResult(); ok {
-			result.skillCandidates = append(result.skillCandidates, item)
-		}
-		if item, ok := semantic.ToValidationResult(); ok {
-			result.validation = append(result.validation, item)
-		}
+		appendFollowupLabels(&result, semantic)
 	}
+
 	return result, nil
+}
+
+func appendSemanticLabels(result *semanticReportResults, semantic analyze.SemanticResult) {
+	if taskType, ok := semantic.ToTaskTypeResultIfAvailable(); ok {
+		result.taskTypes = append(result.taskTypes, taskType)
+	}
+}
+
+func appendFollowupLabels(result *semanticReportResults, semantic analyze.SemanticResult) {
+	if item, ok := semantic.ToSteeringReasonResult(); ok {
+		result.reasons = append(result.reasons, item)
+	}
+	if item, ok := semantic.ToPreventionResult(); ok {
+		result.prevention = append(result.prevention, item)
+	}
+	if item, ok := semantic.ToPromptQualityResult(); ok {
+		result.promptQuality = append(result.promptQuality, item)
+	}
+	if item, ok := semantic.ToAgentsRuleResult(); ok {
+		result.agentsRules = append(result.agentsRules, item)
+	}
+	if item, ok := semantic.ToSkillCandidateResult(); ok {
+		result.skillCandidates = append(result.skillCandidates, item)
+	}
+	if item, ok := semantic.ToValidationResult(); ok {
+		result.validation = append(result.validation, item)
+	}
 }
 
 type semanticProgressRenderer struct {
@@ -101,6 +123,7 @@ type semanticProgressRenderer struct {
 	started           bool
 	nextPrint         int
 	finished          bool
+	writeErr          error
 	lastProgress      analyze.SemanticProgress
 	lastUpdate        time.Time
 	spinnerFrame      int
@@ -112,7 +135,7 @@ type semanticProgressRenderer struct {
 func newSemanticProgressRenderer(translator i18n.Translator, writer io.Writer, tty bool) *semanticProgressRenderer {
 	return &semanticProgressRenderer{
 		translator: translator, writer: writer, tty: tty,
-		heartbeatInterval: 200 * time.Millisecond,
+		heartbeatInterval: semanticProgressHeartbeatInterval,
 	}
 }
 
@@ -128,7 +151,10 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 		if !r.cold {
 			return
 		}
-		fmt.Fprintln(r.writer, ansiText(r.tty, ansiDim, r.translator.T("semantic_privacy")))
+		r.writeLocked(ansiText(r.tty, ansiDim, r.translator.T("semantic_privacy")) + "\n")
+		if r.writeErr != nil {
+			return
+		}
 		r.nextPrint = 0
 	}
 	if !r.cold || progress.TotalRecords <= 0 {
@@ -137,7 +163,7 @@ func (r *semanticProgressRenderer) Update(progress analyze.SemanticProgress) {
 	r.lastProgress = progress
 	r.lastUpdate = time.Now()
 	r.startHeartbeatLocked()
-	percent := progress.CompletedRecords * 100 / progress.TotalRecords
+	percent := progress.CompletedRecords * percentageScale / progress.TotalRecords
 	if progress.CompletedRecords < progress.TotalRecords && percent < r.nextPrint {
 		return
 	}
@@ -183,10 +209,33 @@ func (r *semanticProgressRenderer) pulse(now time.Time) {
 	r.renderLocked(progress)
 }
 
-var semanticSpinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+func semanticSpinnerFrame(index int) string {
+	switch index % semanticSpinnerFrameCount {
+	case semanticSpinnerFrameFirst:
+		return "⠋"
+	case semanticSpinnerFrameSecond:
+		return "⠙"
+	case semanticSpinnerFrameThird:
+		return "⠹"
+	case semanticSpinnerFrameFourth:
+		return "⠸"
+	case semanticSpinnerFrameFifth:
+		return "⠼"
+	case semanticSpinnerFrameSixth:
+		return "⠴"
+	case semanticSpinnerFrameSeventh:
+		return "⠦"
+	case semanticSpinnerFrameEighth:
+		return "⠧"
+	case semanticSpinnerFrameNinth:
+		return "⠇"
+	default:
+		return "⠏"
+	}
+}
 
 func (r *semanticProgressRenderer) renderLocked(progress analyze.SemanticProgress) {
-	percent := progress.CompletedRecords * 100 / progress.TotalRecords
+	percent := progress.CompletedRecords * percentageScale / progress.TotalRecords
 	line := fmt.Sprintf("%s: %d%% (%d/%d), %s=%d, %s=%d, %s=%s",
 		r.translator.T("semantic_progress"), percent, progress.CompletedRecords, progress.TotalRecords,
 		r.translator.T("semantic_workers"), progress.ConfiguredWorkers,
@@ -200,20 +249,42 @@ func (r *semanticProgressRenderer) renderLocked(progress analyze.SemanticProgres
 		}
 		line = ansiText(true, style, line)
 		if progress.CompletedRecords < progress.TotalRecords {
-			line += " " + ansiText(true, ansiYellow, semanticSpinnerFrames[r.spinnerFrame%len(semanticSpinnerFrames)])
+			line += " " + ansiText(true, ansiYellow, semanticSpinnerFrame(r.spinnerFrame))
 			r.spinnerFrame++
 		}
-		fmt.Fprintf(r.writer, "\r\x1b[2K%s", line)
+		r.writeLocked("\r\x1b[2K" + line)
 	} else {
-		fmt.Fprintln(r.writer, line)
+		r.writeLocked(line + "\n")
 	}
 }
 
-func (r *semanticProgressRenderer) Finish() {
+func (r *semanticProgressRenderer) writeLocked(text string) {
+	if r.writeErr != nil {
+		return
+	}
+	written, err := io.WriteString(r.writer, text)
+	if err == nil && written != len(text) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		r.writeErr = fmt.Errorf("write semantic progress: %w", err)
+	}
+}
+
+func (r *semanticProgressRenderer) Err() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.writeErr
+}
+
+func (r *semanticProgressRenderer) Finish() error {
 	r.mu.Lock()
 	if r.finished {
+		err := r.writeErr
 		r.mu.Unlock()
-		return
+
+		return err
 	}
 	r.finished = true
 	if r.heartbeatStop != nil {
@@ -221,16 +292,20 @@ func (r *semanticProgressRenderer) Finish() {
 	}
 	done := r.heartbeatDone
 	if r.cold && r.tty {
-		fmt.Fprintln(r.writer)
+		r.writeLocked("\n")
 	}
+	writeErr := r.writeErr
 	r.mu.Unlock()
 	if done != nil {
 		<-done
 	}
+
+	return writeErr
 }
 
 func stdoutIsTTY() bool {
 	info, err := os.Stdout.Stat()
+
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
@@ -238,6 +313,7 @@ func formatDuration(value time.Duration) string {
 	if value < time.Millisecond {
 		return "0ms"
 	}
+
 	return (value.Round(time.Millisecond)).String()
 }
 

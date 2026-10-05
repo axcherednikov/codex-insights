@@ -21,10 +21,10 @@ The fixture records methodology, prompt, and schema versions independently.
 Bump methodology when the classification definitions or evaluation procedure
 changes; bump prompt when Judge instructions change; bump schema when the
 wire/result shape changes. Current production versions are `semantic-v2`,
-`semantic-judge-v2`, and `semantic-schema-v2`. The prompt version advances
-independently, so the new prompt causes a cold production semantic cache while
-leaving methodology and result schema versions unchanged. All three participate
-in production cache keys.
+`semantic-judge-v2`, and `semantic-schema-v2`. These identities advance
+independently, although this release changes both the methodology and prompt
+versions while leaving the result schema unchanged. All three participate in
+production cache keys.
 Model and reasoning effort also intentionally invalidate cache entries;
 language does not, because labels are language-independent. The persistent
 cache stores labels and confidence values, never raw conversation text. A cold

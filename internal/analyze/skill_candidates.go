@@ -13,6 +13,8 @@ import (
 
 const skillCandidatesCacheVersion = "skill-candidates-v1"
 
+const skillCandidatesBatchSize = 10
+
 type SkillCandidateResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
 	Category       string  `json:"category"`
@@ -38,9 +40,10 @@ type SkillCandidatesAnalyzer struct {
 func NewSkillCandidatesAnalyzer() (SkillCandidatesAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return SkillCandidatesAnalyzer{}, err
+		return SkillCandidatesAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
-	return SkillCandidatesAnalyzer{runner: judge.New(), cache: store, batchSize: 10}, nil
+
+	return SkillCandidatesAnalyzer{runner: judge.New(), cache: store, batchSize: skillCandidatesBatchSize}, nil
 }
 
 func (a SkillCandidatesAnalyzer) Analyze(
@@ -49,17 +52,65 @@ func (a SkillCandidatesAnalyzer) Analyze(
 ) (SkillCandidatesAnalysis, error) {
 	cases := preventionCases(followups, preventionResults, "skill")
 	analysis := SkillCandidatesAnalysis{Results: make([]SkillCandidateResult, 0, len(cases))}
+	resultsByTurn, pending, cacheHits := a.selectPending(cases)
+	analysis.CacheHits = cacheHits
+
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return SkillCandidatesAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
+
+	analysis.Results, err = assembleSkillCandidatesAnalysis(cases, resultsByTurn)
+	if err != nil {
+		return SkillCandidatesAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a SkillCandidatesAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]SkillCandidateResult, []sessions.Followup, int) {
 	resultsByTurn := make(map[string]SkillCandidateResult, len(cases))
 	pending := make([]sessions.Followup, 0, len(cases))
+	cacheHits := 0
 	for _, item := range cases {
 		var cached SkillCandidateResult
 		if a.cache != nil && a.cache.Get(skillCandidatesCacheKey(item), &cached) && cached.PreviousTurnID == item.PreviousTurnID && isSkillCandidate(cached.Category) {
 			resultsByTurn[item.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
 		pending = append(pending, item)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assembleSkillCandidatesAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]SkillCandidateResult,
+) ([]SkillCandidateResult, error) {
+	results := make([]SkillCandidateResult, 0, len(cases))
+	for _, item := range cases {
+		result, ok := resultsByTurn[item.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingSkillCandidateResult, item.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a SkillCandidatesAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]SkillCandidateResult,
+) (int, error) {
+	var evaluated int
+
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
 		if end > len(pending) {
@@ -68,9 +119,9 @@ func (a SkillCandidatesAnalyzer) Analyze(
 		batch := pending[start:end]
 		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return SkillCandidatesAnalysis{}, fmt.Errorf("analyze Skill candidates batch %d-%d: %w", start, end, err)
+			return 0, fmt.Errorf("analyze Skill candidates batch %d-%d: %w", start, end, err)
 		}
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 		for _, result := range results {
 			resultsByTurn[result.PreviousTurnID] = result
 		}
@@ -81,22 +132,16 @@ func (a SkillCandidatesAnalyzer) Analyze(
 					continue
 				}
 				if err := a.cache.Set(skillCandidatesCacheKey(item), result); err != nil {
-					return SkillCandidatesAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 			if err := a.cache.Save(); err != nil {
-				return SkillCandidatesAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
-	for _, item := range cases {
-		result, ok := resultsByTurn[item.PreviousTurnID]
-		if !ok {
-			return SkillCandidatesAnalysis{}, fmt.Errorf("missing Skill candidate result for turn %q", item.PreviousTurnID)
-		}
-		analysis.Results = append(analysis.Results, result)
-	}
-	return analysis, nil
+
+	return evaluated, nil
 }
 
 func (a SkillCandidatesAnalyzer) analyzeBatch(cases []sessions.Followup) ([]SkillCandidateResult, error) {
@@ -104,10 +149,8 @@ func (a SkillCandidatesAnalyzer) analyzeBatch(cases []sessions.Followup) ([]Skil
 	for _, item := range cases {
 		records = append(records, followupJudgeRecord{PreviousTurnID: item.PreviousTurnID, PreviousAnswer: item.PreviousAnswer, Followup: item.Prompt})
 	}
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal Skill candidate cases: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 	prompt := `Classify each skill-prevention case into one reusable workflow category.
 
 Categories:
@@ -122,11 +165,12 @@ Records:
 ` + string(data)
 	var response skillCandidatesResponse
 	if err := a.runner.Run(prompt, skillCandidatesSchema(), &response); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 	if err := validateSkillCandidatesResults(cases, response.Results); err != nil {
 		return nil, err
 	}
+
 	return response.Results, nil
 }
 
@@ -135,19 +179,20 @@ func validateSkillCandidatesResults(cases []sessions.Followup, results []SkillCa
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return fmt.Errorf("judge returned unexpected turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return fmt.Errorf("judge returned duplicate turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 		if !isSkillCandidate(result.Category) {
-			return fmt.Errorf("judge returned unsupported Skill candidate category %q", result.Category)
+			return fmt.Errorf("%w %q", errUnsupportedSkillCandidate, result.Category)
 		}
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 	if len(seen) != len(expected) {
-		return fmt.Errorf("judge returned %d results, expected %d", len(seen), len(expected))
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
+
 	return nil
 }
 
@@ -160,6 +205,7 @@ func skillCandidatesCacheKey(item sessions.Followup) string {
 	hash.Write([]byte(item.PreviousAnswer))
 	hash.Write([]byte{0})
 	hash.Write([]byte(item.Prompt))
+
 	return "skill-candidates:" + hex.EncodeToString(hash.Sum(nil))
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/axcherednikov/codex-insights/internal/sessions"
@@ -27,8 +28,9 @@ type collectedSessions struct {
 func collectSessions(root string, window sessionWindow) (collectedSessions, error) {
 	files, err := sessions.FindRollouts(root)
 	if err != nil {
-		return collectedSessions{}, err
+		return collectedSessions{}, fmt.Errorf("find session rollouts: %w", err)
 	}
+
 	return collectSessionFiles(files, window), nil
 }
 
@@ -47,10 +49,12 @@ func collectSessionFiles(files []string, window sessionWindow) collectedSessions
 			if timestampInWindow(meta.StartedAt, window.Since, window.Before) {
 				collected.ExcludedJudgeSessions++
 			}
+
 			continue
 		}
 		if window.LegacyExcludeOriginator != "" && meta.Originator == window.LegacyExcludeOriginator {
 			collected.LegacyExcludedSessions++
+
 			continue
 		}
 		interactions, err := sessions.ParseInteractions(file, window.Before)
@@ -69,5 +73,6 @@ func collectSessionFiles(files []string, window sessionWindow) collectedSessions
 		}
 		collected.Followups = append(collected.Followups, sessions.BuildFollowups(filtered)...)
 	}
+
 	return collected
 }

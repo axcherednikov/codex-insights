@@ -8,6 +8,8 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
+const minimumSkillCandidateCount = 2
+
 type promptQualityStat struct {
 	Issue string
 	Count int
@@ -36,8 +38,10 @@ func aggregatePromptQuality(results []analyze.PromptQualityResult) []promptQuali
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Issue < stats[j].Issue
 	})
+
 	return stats
 }
 
@@ -56,8 +60,10 @@ func aggregateAgentsRules(results []analyze.AgentsRuleResult) []agentsRuleStat {
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Rule < stats[j].Rule
 	})
+
 	return stats
 }
 
@@ -70,7 +76,7 @@ func aggregateSkillCandidates(results []analyze.SkillCandidateResult) []skillCan
 	}
 	stats := make([]skillCandidateStat, 0, len(counts))
 	for category, count := range counts {
-		if count >= 2 {
+		if count >= minimumSkillCandidateCount {
 			stats = append(stats, skillCandidateStat{Category: category, Count: count})
 		}
 	}
@@ -78,8 +84,10 @@ func aggregateSkillCandidates(results []analyze.SkillCandidateResult) []skillCan
 		if stats[i].Count != stats[j].Count {
 			return stats[i].Count > stats[j].Count
 		}
+
 		return stats[i].Category < stats[j].Category
 	})
+
 	return stats
 }
 

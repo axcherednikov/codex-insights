@@ -60,7 +60,7 @@ func printEffectiveness(tr i18n.Translator, analysis analyze.EffectivenessAnalys
 func printEffectivenessStats(tr i18n.Translator, stats analyze.EffectivenessStats) {
 	rate := 0.0
 	if stats.Samples > 0 {
-		rate = 100 * float64(stats.Steering) / float64(stats.Samples)
+		rate = percentageScale * float64(stats.Steering) / float64(stats.Samples)
 	}
 	fmt.Printf(
 		"%s=%d, %s=%.1f%%, %s=%.0f, %s=%.1f, %s=%.1f\n",
@@ -86,22 +86,34 @@ func printHumanInsights(
 	fmt.Println()
 	printConsoleSection(tr.T("insights_summary"))
 	if effectiveness.Overall.Samples > 0 {
-		fmt.Printf("  %s\n", insightText(tr, "summary", effectiveness.Overall.Samples, 100*steeringRate(effectiveness.Overall)))
+		fmt.Printf("  %s\n", insightText(tr, "summary", effectiveness.Overall.Samples, percentageScale*steeringRate(effectiveness.Overall)))
 	} else {
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
 	printConsoleSection(tr.T("insights_strengths"))
 	if strength := lowestMeaningfulTaskType(effectiveness.TaskTypeStats); strength != nil {
-		fmt.Printf("  %s\n", insightText(tr, "strength", strength.Stats.Samples, 100*float64(strength.Stats.Steering)/float64(strength.Stats.Samples), tr.TaskType(strength.TaskType)))
+		fmt.Printf("  %s\n", insightText(tr, "strength", strength.Stats.Samples, percentageScale*float64(strength.Stats.Steering)/float64(strength.Stats.Samples), tr.TaskType(strength.TaskType)))
 	} else {
 		fmt.Printf("  %s\n", tr.T("insights_limited"))
 	}
 
+	printHumanPriorityInsights(tr, effectiveness, reasons, promptQuality, agentsRules, skillCandidates, validation)
+}
+
+func printHumanPriorityInsights(
+	tr i18n.Translator,
+	effectiveness analyze.EffectivenessAnalysis,
+	reasons []analyze.SteeringReasonResult,
+	promptQuality []analyze.PromptQualityResult,
+	agentsRules []analyze.AgentsRuleResult,
+	skillCandidates []analyze.SkillCandidateResult,
+	validation []analyze.ValidationResult,
+) {
 	printConsoleSection(tr.T("insights_weaknesses"))
 	weaknessPrinted := false
 	if weakness := highestMeaningfulTaskType(effectiveness.TaskTypeStats); weakness != nil {
-		fmt.Printf("  %s\n", insightText(tr, "weakness", weakness.Stats.Samples, 100*float64(weakness.Stats.Steering)/float64(weakness.Stats.Samples), tr.TaskType(weakness.TaskType)))
+		fmt.Printf("  %s\n", insightText(tr, "weakness", weakness.Stats.Samples, percentageScale*float64(weakness.Stats.Steering)/float64(weakness.Stats.Samples), tr.TaskType(weakness.TaskType)))
 		weaknessPrinted = true
 	}
 	if top := topReason(reasons); top != "" {
@@ -139,12 +151,12 @@ func printHumanInsights(
 			lowPrinted = true
 		}
 	}
-	if len(effectiveness.SubagentGlobal) == 2 {
+	if len(effectiveness.SubagentGlobal) == subagentCohortCount {
 		fmt.Printf("  %s\n", insightText(tr, "subagent_experiment"))
 		lowPrinted = true
 	}
 	if hypothesis := matchedRoutingHypothesis(effectiveness.ModelComparisons); hypothesis != nil {
-		fmt.Printf("  %s\n", insightText(tr, "model_routing", hypothesis.Lower.Model, hypothesis.Lower.Effort, tr.TaskType(hypothesis.TaskType), hypothesis.Other.Effort, 100*steeringRate(hypothesis.Lower.Stats), 100*steeringRate(hypothesis.Other.Stats)))
+		fmt.Printf("  %s\n", insightText(tr, "model_routing", hypothesis.Lower.Model, hypothesis.Lower.Effort, tr.TaskType(hypothesis.TaskType), hypothesis.Other.Effort, percentageScale*steeringRate(hypothesis.Lower.Stats), percentageScale*steeringRate(hypothesis.Other.Stats)))
 		lowPrinted = true
 	}
 	if !lowPrinted {
@@ -152,59 +164,90 @@ func printHumanInsights(
 	}
 }
 
+type insightFormat struct {
+	text      string
+	arguments int
+}
+
 func insightText(tr i18n.Translator, kind string, values ...any) string {
+	format, found := englishInsightFormat(kind)
+	fallback := "Insufficient data."
 	if tr.Language == i18n.Russian {
-		switch kind {
-		case "summary":
-			return fmt.Sprintf("%d завершённых предыдущих задач с последующей поведенческой оценкой; корректировки: %.1f%%.", values[0], values[1])
-		case "strength":
-			return fmt.Sprintf("Тип задач «%s» имеет наименьшую долю корректировок среди значимых когорт: %.1f%% (%d наблюдений).", values[2], values[1], values[0])
-		case "weakness":
-			return fmt.Sprintf("Тип задач «%s» имеет наибольшую долю корректировок среди значимых когорт: %.1f%% (%d наблюдений).", values[2], values[1], values[0])
-		case "reason":
-			return fmt.Sprintf("Наиболее частая причина корректировок: %s.", values[0])
-		case "validation":
-			return fmt.Sprintf("Приоритетный эксперимент: добавить проверку «%s» к соответствующим задачам.", values[0])
-		case "reason_recommendation":
-			return fmt.Sprintf("Приоритетный эксперимент: отдельно проверять задачи с риском «%s» до завершения.", values[0])
-		case "prompt":
-			return fmt.Sprintf("Уточнять постановки, где чаще всего выявляется проблема «%s».", values[0])
-		case "rule":
-			return fmt.Sprintf("Рассмотреть правило проекта: %s", values[0])
-		case "skill":
-			return fmt.Sprintf("Проверить гипотезу о пользе переиспользуемого Skill: %s.", values[0])
-		case "subagent_experiment":
-			return "Провести контролируемый эксперимент с маршрутизацией задач к субагентам; текущие данные смещены по сложности."
-		case "model_routing":
-			return fmt.Sprintf("Для типа «%s» у модели %s когорта %s показывает %.1f%% корректировок против %.1f%% у %s при меньшей средней стоимости; проверить это как эксперимент, а не причинный вывод.", values[2], values[0], values[1], values[4], values[5], values[3])
-		}
-		return "Недостаточно данных."
+		format, found = russianInsightFormat(kind)
+		fallback = "Недостаточно данных."
 	}
+	if !found || len(values) != format.arguments {
+		return fallback
+	}
+	arguments := make([]any, len(values))
+	for index, value := range values {
+		if percentage, ok := value.(float64); ok {
+			arguments[index] = fmt.Sprintf("%.1f", percentage)
+
+			continue
+		}
+		arguments[index] = value
+	}
+
+	return fmt.Sprintf(format.text, arguments...)
+}
+
+func englishInsightFormat(kind string) (insightFormat, bool) {
 	switch kind {
 	case "summary":
-		return fmt.Sprintf("%d completed prior tasks had observable follow-up behavior labels; steering: %.1f%%.", values[0], values[1])
+		return insightFormat{"%[1]d completed prior tasks had observable follow-up behavior labels; steering: %[2]s%%.", 2}, true
 	case "strength":
-		return fmt.Sprintf("%s has the lowest steering rate among meaningful cohorts: %.1f%% (%d samples).", values[2], values[1], values[0])
+		return insightFormat{"%[3]s has the lowest steering rate among meaningful cohorts: %[2]s%% (%[1]d samples).", 3}, true
 	case "weakness":
-		return fmt.Sprintf("%s has the highest steering rate among meaningful cohorts: %.1f%% (%d samples).", values[2], values[1], values[0])
+		return insightFormat{"%[3]s has the highest steering rate among meaningful cohorts: %[2]s%% (%[1]d samples).", 3}, true
 	case "reason":
-		return fmt.Sprintf("Most frequent steering reason: %s.", values[0])
+		return insightFormat{"Most frequent steering reason: %s.", 1}, true
 	case "validation":
-		return fmt.Sprintf("Priority experiment: make %s part of the validation for applicable tasks.", values[0])
+		return insightFormat{"Priority experiment: make %s part of the validation for applicable tasks.", 1}, true
 	case "reason_recommendation":
-		return fmt.Sprintf("Priority experiment: explicitly check for %s risks before completion.", values[0])
+		return insightFormat{"Priority experiment: explicitly check for %s risks before completion.", 1}, true
 	case "prompt":
-		return fmt.Sprintf("Clarify prompts where %s is the most common issue.", values[0])
+		return insightFormat{"Clarify prompts where %s is the most common issue.", 1}, true
 	case "rule":
-		return fmt.Sprintf("Consider adopting this project rule: %s", values[0])
+		return insightFormat{"Consider adopting this project rule: %s", 1}, true
 	case "skill":
-		return fmt.Sprintf("Test the hypothesis that a reusable Skill would help: %s.", values[0])
+		return insightFormat{"Test the hypothesis that a reusable Skill would help: %s.", 1}, true
 	case "subagent_experiment":
-		return "Run a controlled routing experiment with subagents; current data is confounded by task difficulty."
+		return insightFormat{"Run a controlled routing experiment with subagents; current data is confounded by task difficulty.", 0}, true
 	case "model_routing":
-		return fmt.Sprintf("For %s, model %s's %s cohort shows %.1f%% steering versus %.1f%% for %s with lower average cost; test this as an experiment, not a causal conclusion.", values[2], values[0], values[1], values[4], values[5], values[3])
+		return insightFormat{"For %[3]s, model %[1]s's %[2]s cohort shows %[5]s%% steering versus %[6]s%% for %[4]s with lower average cost; test this as an experiment, not a causal conclusion.", 6}, true
+	default:
+		return insightFormat{}, false
 	}
-	return "Insufficient data."
+}
+
+func russianInsightFormat(kind string) (insightFormat, bool) {
+	switch kind {
+	case "summary":
+		return insightFormat{"%[1]d завершённых предыдущих задач с последующей поведенческой оценкой; корректировки: %[2]s%%.", 2}, true
+	case "strength":
+		return insightFormat{"Тип задач «%[3]s» имеет наименьшую долю корректировок среди значимых когорт: %[2]s%% (%[1]d наблюдений).", 3}, true
+	case "weakness":
+		return insightFormat{"Тип задач «%[3]s» имеет наибольшую долю корректировок среди значимых когорт: %[2]s%% (%[1]d наблюдений).", 3}, true
+	case "reason":
+		return insightFormat{"Наиболее частая причина корректировок: %s.", 1}, true
+	case "validation":
+		return insightFormat{"Приоритетный эксперимент: добавить проверку «%s» к соответствующим задачам.", 1}, true
+	case "reason_recommendation":
+		return insightFormat{"Приоритетный эксперимент: отдельно проверять задачи с риском «%s» до завершения.", 1}, true
+	case "prompt":
+		return insightFormat{"Уточнять постановки, где чаще всего выявляется проблема «%s».", 1}, true
+	case "rule":
+		return insightFormat{"Рассмотреть правило проекта: %s", 1}, true
+	case "skill":
+		return insightFormat{"Проверить гипотезу о пользе переиспользуемого Skill: %s.", 1}, true
+	case "subagent_experiment":
+		return insightFormat{"Провести контролируемый эксперимент с маршрутизацией задач к субагентам; текущие данные смещены по сложности.", 0}, true
+	case "model_routing":
+		return insightFormat{"Для типа «%[3]s» у модели %[1]s когорта %[2]s показывает %[5]s%% корректировок против %[6]s%% у %[4]s при меньшей средней стоимости; проверить это как эксперимент, а не причинный вывод.", 6}, true
+	default:
+		return insightFormat{}, false
+	}
 }
 
 func lowestMeaningfulTaskType(stats []analyze.TaskTypeEffectiveness) *analyze.TaskTypeEffectiveness {
@@ -218,6 +261,7 @@ func lowestMeaningfulTaskType(stats []analyze.TaskTypeEffectiveness) *analyze.Ta
 			result = &stats[i]
 		}
 	}
+
 	return result
 }
 
@@ -232,6 +276,7 @@ func highestMeaningfulTaskType(stats []analyze.TaskTypeEffectiveness) *analyze.T
 			result = &stats[i]
 		}
 	}
+
 	return result
 }
 
@@ -249,6 +294,7 @@ func matchedRoutingHypothesis(comparisons []analyze.ModelEffectiveness) *modelRo
 		if left.Model != right.Model {
 			return left.Model < right.Model
 		}
+
 		return left.Effort < right.Effort
 	})
 	for i := range ordered {
@@ -267,9 +313,11 @@ func matchedRoutingHypothesis(comparisons []analyze.ModelEffectiveness) *modelRo
 			if !lowerCost(lower.Stats, other.Stats) || steeringRate(lower.Stats) > steeringRate(other.Stats) {
 				continue
 			}
+
 			return &modelRoutingHypothesis{TaskType: lower.TaskType, Model: lower.Model, Lower: lower, Other: other}
 		}
 	}
+
 	return nil
 }
 
@@ -290,6 +338,7 @@ func steeringRate(stats analyze.EffectivenessStats) float64 {
 	if stats.Samples == 0 {
 		return 0
 	}
+
 	return float64(stats.Steering) / float64(stats.Samples)
 }
 
@@ -332,10 +381,12 @@ func topStringExcluding[T any](results []T, key func(T) string, excluded ...stri
 		if counts[values[i]] != counts[values[j]] {
 			return counts[values[i]] > counts[values[j]]
 		}
+
 		return values[i] < values[j]
 	})
 	if len(values) == 0 {
 		return ""
 	}
+
 	return values[0]
 }

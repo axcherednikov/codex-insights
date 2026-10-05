@@ -26,10 +26,7 @@ func New(value string) (Translator, error) {
 		language = detectLanguage()
 	case English, Russian:
 	default:
-		return Translator{}, fmt.Errorf(
-			"unsupported language %q; supported: auto, en, ru",
-			value,
-		)
+		return Translator{}, fmt.Errorf("%w %q; supported: auto, en, ru", errUnsupportedLanguage, value)
 	}
 
 	return Translator{Language: language}, nil
@@ -38,11 +35,9 @@ func New(value string) (Translator, error) {
 func detectLanguage() Language {
 	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		value := strings.ToLower(os.Getenv(key))
-
 		if strings.HasPrefix(value, "ru") {
 			return Russian
 		}
-
 		if strings.HasPrefix(value, "en") {
 			return English
 		}
@@ -52,367 +47,453 @@ func detectLanguage() Language {
 }
 
 func (t Translator) T(key string) string {
-	if t.Language == Russian {
-		if value, ok := russian[key]; ok {
-			return value
-		}
-		if value, ok := russianRecommendations[key]; ok {
-			return value
-		}
+	english, russian, found := baseTranslation(key)
+	if !found {
+		english, russian, found = recommendationTextTranslation(key)
 	}
 
-	if value, ok := english[key]; ok {
-		return value
+	return localized(t.Language, english, russian, found, key)
+}
+
+func baseTranslation(key string) (string, string, bool) {
+	if english, russian, found := lookupBaseLabels(key); found {
+		return english, russian, true
 	}
-	if value, ok := englishRecommendations[key]; ok {
-		return value
+	if english, russian, found := lookupReportLabels(key); found {
+		return english, russian, true
 	}
 
-	return key
+	return "", "", false
+}
+
+func lookupBaseLabels(key string) (string, string, bool) {
+	if english, russian, found := lookupUsagePeriod(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupUsageStatus(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupReportAverages(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupAnalysisLabels(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupAnalysisSections(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupSemanticStatus(key); found {
+		return english, russian, true
+	}
+
+	return "", "", false
+}
+
+func lookupReportLabels(key string) (string, string, bool) {
+	if english, russian, found := lookupSemanticTiming(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupEffectivenessCohorts(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupEffectivenessInsights(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupGoldenExport(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupGoldenFields(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupGoldenMetrics(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupHistorical(key); found {
+		return english, russian, true
+	}
+
+	return "", "", false
+}
+
+func localized(language Language, english, russian string, found bool, fallback string) string {
+	if !found {
+		return fallback
+	}
+
+	if language == Russian {
+		return russian
+	}
+
+	return english
 }
 
 func (t Translator) TaskType(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianTaskTypes[value]; ok {
-			return translated
-		}
-	}
+	english, russian, found := taskTypeTranslation(value)
 
-	if translated, ok := englishTaskTypes[value]; ok {
-		return translated
-	}
+	return localized(t.Language, english, russian, found, value)
+}
 
-	return value
+func taskTypeTranslation(key string) (string, string, bool) {
+	switch key {
+	case "architecture":
+		return "Architecture", "Архитектура", true
+	case "bugfix":
+		return "Bug fix", "Исправление ошибок", true
+	case "code_review":
+		return "Code review", "Ревью кода", true
+	case "devops":
+		return "DevOps", "DevOps", true
+	case "documentation":
+		return "Documentation", "Документация", true
+	case "feature":
+		return "Feature", "Новая функциональность", true
+	case "other":
+		return "Other", "Другое", true
+	case "refactor":
+		return "Refactoring", "Рефакторинг", true
+	case "research":
+		return "Research", "Исследование", true
+	case "tests":
+		return "Tests", "Тесты", true
+	case "unknown":
+		return "Unknown task type", "Неизвестный тип задачи", true
+	default:
+		return "", "", false
+	}
 }
 
 func (t Translator) SteeringReason(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianSteeringReasons[value]; ok {
-			return translated
-		}
+	english, russian, found := steeringReasonTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func steeringReasonTranslation(key string) (string, string, bool) {
+	switch key {
+	case "architecture_mismatch":
+		return "Architecture mismatch", "Несоответствие архитектуре", true
+	case "ignored_constraints":
+		return "Ignored constraints", "Проигнорированы ограничения", true
+	case "implementation_error":
+		return "Implementation error", "Ошибка реализации", true
+	case "insufficient_validation":
+		return "Insufficient validation", "Недостаточная проверка результата", true
+	case "misunderstood_request":
+		return "Misunderstood request", "Неверно понята задача", true
+	case "other":
+		return "Other", "Другое", true
+	case "overengineering":
+		return "Overengineering", "Переусложнение решения", true
+	case "wrong_output_format":
+		return "Wrong output format", "Неверный формат результата", true
+	default:
+		return "", "", false
 	}
+}
 
-	if translated, ok := englishSteeringReasons[value]; ok {
-		return translated
+func lookupUsagePeriod(key string) (string, string, bool) {
+	switch key {
+	case "quick_title":
+		return "Codex Insights Quick", "Codex Insights: быстрый отчёт", true
+	case "analyze_title":
+		return "Codex Insights Analyze", "Codex Insights: глубокий анализ", true
+	case "period":
+		return "Period", "Период", true
+	case "all_history":
+		return "all history", "вся история", true
+	case "last_days":
+		return "last %d days", "последние %d дней", true
+	default:
+		return "", "", false
 	}
-
-	return value
 }
 
-var english = map[string]string{
-	"quick_title":                       "Codex Insights Quick",
-	"analyze_title":                     "Codex Insights Analyze",
-	"period":                            "Period",
-	"all_history":                       "all history",
-	"last_days":                         "last %d days",
-	"user_sessions":                     "User sessions",
-	"tasks":                             "Tasks",
-	"status":                            "Status",
-	"complete":                          "complete",
-	"aborted":                           "aborted",
-	"incomplete":                        "incomplete",
-	"completed_averages":                "Completed task averages",
-	"tokens":                            "Tokens",
-	"duration":                          "Duration",
-	"seconds_short":                     "sec",
-	"tool_calls":                        "Tool calls",
-	"model_reasoning":                   "Model + reasoning effort",
-	"auto_excluded_judges":              "Auto-excluded Codex Insights judge sessions",
-	"legacy_excluded":                   "Legacy-excluded %s sessions",
-	"read_errors":                       "Read errors",
-	"followup_pairs":                    "Follow-up pairs",
-	"running_steering":                  "Running steering analysis...",
-	"running_task_types":                "Running task type analysis...",
-	"running_reasons":                   "Running steering reason analysis...",
-	"judge":                             "LLM evaluation",
-	"steering_cache_hits":               "Steering cache hits",
-	"steering_new":                      "Steering newly evaluated",
-	"task_type_cache_hits":              "Task type cache hits",
-	"task_type_new":                     "Task types newly evaluated",
-	"reason_cache_hits":                 "Reason cache hits",
-	"reason_new":                        "Reasons newly evaluated",
-	"behavior":                          "Behavior",
-	"analyzed":                          "Analyzed",
-	"steering":                          "Steering",
-	"continuation":                      "Continuation",
-	"questions":                         "Questions",
-	"user_correction":                   "User correction",
-	"steering_reasons":                  "Steering reasons",
-	"task_types":                        "Task types",
-	"steering_by_task_type":             "Steering by task type",
-	"followups":                         "follow-ups",
-	"nothing_to_analyze":                "Nothing to analyze.",
-	"semantic_privacy":                  "Bounded excerpts of selected task prompts, final answers, and follow-ups will be sent to the configured Judge; the persistent semantic cache stores labels, not raw conversations.",
-	"codex_cli_missing":                 "Codex CLI was not found in PATH. Install it from https://developers.openai.com/codex/cli, then run \"codex\" once to sign in.",
-	"semantic_progress":                 "Semantic analysis",
-	"semantic_workers":                  "workers",
-	"semantic_cache_hits_short":         "cache hits",
-	"semantic_elapsed":                  "elapsed",
-	"semantic_cache_hits":               "Semantic cache hits",
-	"semantic_new":                      "Semantic records newly evaluated",
-	"semantic_methodology":              "Methodology",
-	"semantic_model":                    "Model / effort",
-	"semantic_prompt_version":           "Prompt version",
-	"semantic_schema_version":           "Schema version",
-	"timing_discovery":                  "session discovery",
-	"timing_parsing":                    "local parsing",
-	"timing_cache_lookup":               "cache lookup",
-	"timing_judge":                      "semantic Judge",
-	"timing_conversion":                 "result conversion",
-	"timing_aggregation":                "aggregation",
-	"timing_report":                     "final report",
-	"effectiveness":                     "Model and reasoning effectiveness",
-	"effectiveness_insufficient":        "Insufficient cohort evidence for a comparison (minimum 10 samples per cohort).",
-	"effectiveness_caveat":              "These are associations, not causal effects; harder tasks may be routed to higher reasoning levels.",
-	"subagent_effectiveness":            "Subagent effectiveness",
-	"subagent_selection_bias":           "Selection bias warning: difficult tasks are more likely to use subagents, so this comparison does not establish that subagents help or hurt.",
-	"with_subagents":                    "With subagents",
-	"without_subagents":                 "Without subagents",
-	"samples":                           "samples",
-	"steering_rate":                     "steering",
-	"average_tokens":                    "avg tokens",
-	"average_seconds":                   "avg seconds",
-	"average_tool_calls":                "avg tool calls",
-	"insights_summary":                  "Summary",
-	"insights_strengths":                "Strengths",
-	"insights_weaknesses":               "Weaknesses",
-	"insights_high":                     "High-priority recommendations",
-	"insights_medium":                   "Medium-priority recommendations",
-	"insights_low":                      "Low-priority recommendations",
-	"insights_limited":                  "Evidence is limited; no reliable cohort comparison is available yet.",
-	"golden_export_title":               "Golden fixture candidate exported",
-	"golden_candidate_cases":            "Candidate cases",
-	"golden_output":                     "Output",
-	"golden_local_only":                 "Only minimized, automatically redacted local data was written; no Judge was called. Review the candidate locally because redaction is not a guarantee of secrecy. Human approval is required before evaluation.",
-	"golden_evaluate_title":             "Golden fixture evaluation",
-	"golden_field_task_type":            "task type",
-	"golden_field_followup":             "follow-up label",
-	"golden_field_steering_reason":      "steering reason",
-	"golden_field_prompt_issue":         "prompt issue",
-	"golden_field_agents_rule":          "AGENTS.md rule",
-	"golden_field_skill_candidate":      "Skill candidate",
-	"golden_field_validation_type":      "validation type",
-	"golden_field_prevention":           "prevention mechanisms",
-	"golden_samples":                    "samples",
-	"golden_exact":                      "exact matches",
-	"golden_precision":                  "precision",
-	"golden_recall":                     "recall",
-	"golden_f1":                         "F1",
-	"golden_expected":                   "expected",
-	"golden_predicted":                  "predicted",
-	"golden_methodology_warning":        "Warning: fixture methodology differs from current (%s / %s / %s vs %s / %s / %s); evaluation uses the current methodology.",
-	"historical_guard":                  "Historical aggregate regression guard",
-	"historical_pass":                   "PASS",
-	"historical_warning":                "WARNING (semantic drift)",
-	"historical_fail":                   "FAIL",
-	"historical_deterministic_mismatch": "deterministic mismatch",
-	"historical_semantic_warning":       "semantic tolerance warning",
-	"historical_calibration_warning":    "Calibration required: historical reference uses %s; current methodology is %s. Follow-up and semantic metrics are uncalibrated.",
+func lookupUsageStatus(key string) (string, string, bool) {
+	switch key {
+	case "user_sessions":
+		return "User sessions", "Пользовательские сессии", true
+	case "tasks":
+		return "Tasks", "Задачи", true
+	case "status":
+		return "Status", "Статус", true
+	case "complete":
+		return "complete", "завершено", true
+	case "aborted":
+		return "aborted", "прервано", true
+	case "incomplete":
+		return "incomplete", "не завершено", true
+	case "codex_cli_missing":
+		return "Codex CLI was not found in PATH. Install it from https://developers.openai.com/codex/cli, then run \"codex\" once to sign in.", "Codex CLI не найден в PATH. Установите его по инструкции https://developers.openai.com/codex/cli, затем один раз запустите \"codex\" и войдите в аккаунт.", true
+	default:
+		return "", "", false
+	}
 }
 
-var russian = map[string]string{
-	"quick_title":                       "Codex Insights: быстрый отчёт",
-	"analyze_title":                     "Codex Insights: глубокий анализ",
-	"period":                            "Период",
-	"all_history":                       "вся история",
-	"last_days":                         "последние %d дней",
-	"user_sessions":                     "Пользовательские сессии",
-	"tasks":                             "Задачи",
-	"status":                            "Статус",
-	"complete":                          "завершено",
-	"aborted":                           "прервано",
-	"incomplete":                        "не завершено",
-	"completed_averages":                "Средние значения завершённых задач",
-	"tokens":                            "Токены",
-	"duration":                          "Длительность",
-	"seconds_short":                     "с",
-	"tool_calls":                        "Вызовы инструментов",
-	"model_reasoning":                   "Модель + глубина рассуждений",
-	"auto_excluded_judges":              "Автоматически исключено сессий LLM-оценщика Codex Insights",
-	"legacy_excluded":                   "Исключено старых сессий %s",
-	"read_errors":                       "Ошибки чтения",
-	"followup_pairs":                    "Последующие реплики",
-	"running_steering":                  "Анализируем корректировки Codex...",
-	"running_task_types":                "Классифицируем типы задач...",
-	"running_reasons":                   "Анализируем причины корректировок...",
-	"judge":                             "LLM-оценка",
-	"steering_cache_hits":               "Корректировок из кеша",
-	"steering_new":                      "Новых оценок корректировок",
-	"task_type_cache_hits":              "Типов задач из кеша",
-	"task_type_new":                     "Новых типов задач",
-	"reason_cache_hits":                 "Причин из кеша",
-	"reason_new":                        "Новых причин",
-	"behavior":                          "Взаимодействие с Codex",
-	"analyzed":                          "Проанализировано",
-	"steering":                          "Корректировки Codex",
-	"continuation":                      "Продолжение работы",
-	"questions":                         "Вопросы и уточнения",
-	"user_correction":                   "Изменение требований пользователем",
-	"steering_reasons":                  "Причины корректировок",
-	"task_types":                        "Типы задач",
-	"steering_by_task_type":             "Корректировки по типам задач",
-	"followups":                         "последующих реплик",
-	"nothing_to_analyze":                "Нет данных для анализа.",
-	"semantic_privacy":                  "Ограниченные по размеру фрагменты выбранных постановок задач, финальных ответов и последующих реплик будут отправлены настроенному оценщику; постоянный семантический кеш хранит метки, а не исходные диалоги.",
-	"codex_cli_missing":                 "Codex CLI не найден в PATH. Установите его по инструкции https://developers.openai.com/codex/cli, затем один раз запустите \"codex\" и войдите в аккаунт.",
-	"semantic_progress":                 "Семантический анализ",
-	"semantic_workers":                  "воркеры",
-	"semantic_cache_hits_short":         "из кеша",
-	"semantic_elapsed":                  "время",
-	"semantic_cache_hits":               "Семантических результатов из кеша",
-	"semantic_new":                      "Новых семантических оценок",
-	"semantic_methodology":              "Методология",
-	"semantic_model":                    "Модель / глубина",
-	"semantic_prompt_version":           "Версия промпта",
-	"semantic_schema_version":           "Версия схемы",
-	"timing_discovery":                  "поиск сессий",
-	"timing_parsing":                    "локальный разбор",
-	"timing_cache_lookup":               "поиск в кеше",
-	"timing_judge":                      "семантический оценщик",
-	"timing_conversion":                 "преобразование результатов",
-	"timing_aggregation":                "агрегация",
-	"timing_report":                     "итоговый отчёт",
-	"effectiveness":                     "Эффективность модели и глубины рассуждений",
-	"effectiveness_insufficient":        "Недостаточно данных для сравнения когорт (минимум 10 наблюдений в каждой).",
-	"effectiveness_caveat":              "Это взаимосвязь, а не причинный эффект: более сложные задачи могут направляться на более глубокие уровни рассуждений.",
-	"subagent_effectiveness":            "Эффективность субагентов",
-	"subagent_selection_bias":           "Предупреждение о смещении выборки: сложные задачи чаще используют субагентов, поэтому сравнение не доказывает, что субагенты помогают или вредят.",
-	"with_subagents":                    "С субагентами",
-	"without_subagents":                 "Без субагентов",
-	"samples":                           "наблюдений",
-	"steering_rate":                     "корректировки",
-	"average_tokens":                    "средние токены",
-	"average_seconds":                   "средние секунды",
-	"average_tool_calls":                "средние вызовы инструментов",
-	"insights_summary":                  "Итог",
-	"insights_strengths":                "Сильные стороны",
-	"insights_weaknesses":               "Слабые стороны",
-	"insights_high":                     "Рекомендации высокого приоритета",
-	"insights_medium":                   "Рекомендации среднего приоритета",
-	"insights_low":                      "Рекомендации низкого приоритета",
-	"insights_limited":                  "Данных мало: надёжное сравнение когорт пока невозможно.",
-	"golden_export_title":               "Кандидат golden-фикстуры экспортирован",
-	"golden_candidate_cases":            "Кандидатов",
-	"golden_output":                     "Файл",
-	"golden_local_only":                 "Записаны только минимизированные локальные данные с автоматической очисткой; оценщик не вызывался. Проверьте кандидат локально: очистка не гарантирует удаления всех секретов. Перед оценкой требуется одобрение человека.",
-	"golden_evaluate_title":             "Оценка golden-фикстуры",
-	"golden_field_task_type":            "тип задачи",
-	"golden_field_followup":             "метка продолжения",
-	"golden_field_steering_reason":      "причина корректировки",
-	"golden_field_prompt_issue":         "проблема постановки",
-	"golden_field_agents_rule":          "правило AGENTS.md",
-	"golden_field_skill_candidate":      "кандидат Skill",
-	"golden_field_validation_type":      "тип проверки",
-	"golden_field_prevention":           "механизмы предотвращения",
-	"golden_samples":                    "наблюдений",
-	"golden_exact":                      "точных совпадений",
-	"golden_precision":                  "точность",
-	"golden_recall":                     "полнота",
-	"golden_f1":                         "F1",
-	"golden_expected":                   "ожидалось",
-	"golden_predicted":                  "получено",
-	"golden_methodology_warning":        "Внимание: методология фикстуры отличается от текущей (%s / %s / %s вместо %s / %s / %s); используется текущая методология.",
-	"historical_guard":                  "Проверка исторического агрегированного эталона",
-	"historical_pass":                   "ПРОЙДЕНО",
-	"historical_warning":                "ПРЕДУПРЕЖДЕНИЕ (семантический дрейф)",
-	"historical_fail":                   "ОШИБКА",
-	"historical_deterministic_mismatch": "расхождение детерминированных данных",
-	"historical_semantic_warning":       "предупреждение о допуске семантики",
-	"historical_calibration_warning":    "Требуется калибровка: исторический эталон использует %s; текущая методология — %s. Метрики продолжений и семантики не откалиброваны.",
+func lookupReportAverages(key string) (string, string, bool) {
+	switch key {
+	case "completed_averages":
+		return "Completed task averages", "Средние значения завершённых задач", true
+	case "tokens":
+		return "Tokens", "Токены", true
+	case "duration":
+		return "Duration", "Длительность", true
+	case "seconds_short":
+		return "sec", "с", true
+	case "tool_calls":
+		return "Tool calls", "Вызовы инструментов", true
+	case "model_reasoning":
+		return "Model + reasoning effort", "Модель + глубина рассуждений", true
+	case "auto_excluded_judges":
+		return "Auto-excluded Codex Insights judge sessions", "Автоматически исключено сессий LLM-оценщика Codex Insights", true
+	case "legacy_excluded":
+		return "Legacy-excluded %s sessions", "Исключено старых сессий %s", true
+	case "read_errors":
+		return "Read errors", "Ошибки чтения", true
+	case "followup_pairs":
+		return "Follow-up pairs", "Последующие реплики", true
+	default:
+		return "", "", false
+	}
 }
 
-var englishTaskTypes = map[string]string{
-	"unknown":       "Unknown task type",
-	"bugfix":        "Bug fix",
-	"feature":       "Feature",
-	"refactor":      "Refactoring",
-	"tests":         "Tests",
-	"code_review":   "Code review",
-	"architecture":  "Architecture",
-	"devops":        "DevOps",
-	"research":      "Research",
-	"documentation": "Documentation",
-	"other":         "Other",
+func lookupAnalysisLabels(key string) (string, string, bool) {
+	switch key {
+	case "running_steering":
+		return "Running steering analysis...", "Анализируем корректировки Codex...", true
+	case "running_task_types":
+		return "Running task type analysis...", "Классифицируем типы задач...", true
+	case "running_reasons":
+		return "Running steering reason analysis...", "Анализируем причины корректировок...", true
+	case "judge":
+		return "LLM evaluation", "LLM-оценка", true
+	case "behavior":
+		return "Behavior", "Взаимодействие с Codex", true
+	case "analyzed":
+		return "Analyzed", "Проанализировано", true
+	case "steering":
+		return "Steering", "Корректировки Codex", true
+	case "continuation":
+		return "Continuation", "Продолжение работы", true
+	case "questions":
+		return "Questions", "Вопросы и уточнения", true
+	case "user_correction":
+		return "User correction", "Изменение требований пользователем", true
+	case "steering_reasons":
+		return "Steering reasons", "Причины корректировок", true
+	default:
+		return "", "", false
+	}
 }
 
-var russianTaskTypes = map[string]string{
-	"unknown":       "Неизвестный тип задачи",
-	"bugfix":        "Исправление ошибок",
-	"feature":       "Новая функциональность",
-	"refactor":      "Рефакторинг",
-	"tests":         "Тесты",
-	"code_review":   "Ревью кода",
-	"architecture":  "Архитектура",
-	"devops":        "DevOps",
-	"research":      "Исследование",
-	"documentation": "Документация",
-	"other":         "Другое",
+func lookupAnalysisSections(key string) (string, string, bool) {
+	switch key {
+	case "task_types":
+		return "Task types", "Типы задач", true
+	case "steering_by_task_type":
+		return "Steering by task type", "Корректировки по типам задач", true
+	case "followups":
+		return "follow-ups", "последующих реплик", true
+	case "nothing_to_analyze":
+		return "Nothing to analyze.", "Нет данных для анализа.", true
+	case "steering_cache_hits":
+		return "Steering cache hits", "Корректировок из кеша", true
+	case "steering_new":
+		return "Steering newly evaluated", "Новых оценок корректировок", true
+	case "task_type_cache_hits":
+		return "Task type cache hits", "Типов задач из кеша", true
+	case "task_type_new":
+		return "Task types newly evaluated", "Новых типов задач", true
+	case "reason_cache_hits":
+		return "Reason cache hits", "Причин из кеша", true
+	case "reason_new":
+		return "Reasons newly evaluated", "Новых причин", true
+	default:
+		return "", "", false
+	}
 }
 
-var englishSteeringReasons = map[string]string{
-	"misunderstood_request":   "Misunderstood request",
-	"implementation_error":    "Implementation error",
-	"insufficient_validation": "Insufficient validation",
-	"architecture_mismatch":   "Architecture mismatch",
-	"overengineering":         "Overengineering",
-	"wrong_output_format":     "Wrong output format",
-	"ignored_constraints":     "Ignored constraints",
-	"other":                   "Other",
+func lookupSemanticStatus(key string) (string, string, bool) {
+	switch key {
+	case "semantic_privacy":
+		return "Bounded excerpts of selected task prompts, final answers, and follow-ups will be sent to the configured Judge; the persistent semantic cache stores labels, not raw conversations.", "Ограниченные по размеру фрагменты выбранных постановок задач, финальных ответов и последующих реплик будут отправлены настроенному оценщику; постоянный семантический кеш хранит метки, а не исходные диалоги.", true
+	case "semantic_progress":
+		return "Semantic analysis", "Семантический анализ", true
+	case "semantic_workers":
+		return "workers", "воркеры", true
+	case "semantic_cache_hits_short":
+		return "cache hits", "из кеша", true
+	case "semantic_elapsed":
+		return "elapsed", "время", true
+	case "semantic_cache_hits":
+		return "Semantic cache hits", "Семантических результатов из кеша", true
+	case "semantic_new":
+		return "Semantic records newly evaluated", "Новых семантических оценок", true
+	case "semantic_methodology":
+		return "Methodology", "Методология", true
+	case "semantic_model":
+		return "Model / effort", "Модель / глубина", true
+	case "semantic_prompt_version":
+		return "Prompt version", "Версия промпта", true
+	case "semantic_schema_version":
+		return "Schema version", "Версия схемы", true
+	default:
+		return "", "", false
+	}
 }
 
-var russianSteeringReasons = map[string]string{
-	"misunderstood_request":   "Неверно понята задача",
-	"implementation_error":    "Ошибка реализации",
-	"insufficient_validation": "Недостаточная проверка результата",
-	"architecture_mismatch":   "Несоответствие архитектуре",
-	"overengineering":         "Переусложнение решения",
-	"wrong_output_format":     "Неверный формат результата",
-	"ignored_constraints":     "Проигнорированы ограничения",
-	"other":                   "Другое",
+func lookupSemanticTiming(key string) (string, string, bool) {
+	switch key {
+	case "timing_discovery":
+		return "session discovery", "поиск сессий", true
+	case "timing_parsing":
+		return "local parsing", "локальный разбор", true
+	case "timing_cache_lookup":
+		return "cache lookup", "поиск в кеше", true
+	case "timing_judge":
+		return "semantic Judge", "семантический оценщик", true
+	case "timing_conversion":
+		return "result conversion", "преобразование результатов", true
+	case "timing_aggregation":
+		return "aggregation", "агрегация", true
+	case "timing_report":
+		return "final report", "итоговый отчёт", true
+	default:
+		return "", "", false
+	}
 }
 
-var englishRecommendations = map[string]string{
-	"running_prevention":          "Running prevention analysis...",
-	"running_validation":          "Running validation gap analysis...",
-	"running_prompt_quality":      "Analyzing prompt quality...",
-	"running_agents_rules":        "Analyzing AGENTS.md recommendations...",
-	"running_skill_candidates":    "Finding reusable Skill candidates...",
-	"prevention_cache_hits":       "Prevention cache hits",
-	"prevention_new":              "Prevention newly evaluated",
-	"validation_cache_hits":       "Validation cache hits",
-	"validation_new":              "Validation newly evaluated",
-	"prompt_quality_cache_hits":   "Prompt quality cache hits",
-	"prompt_quality_new":          "Prompt quality newly evaluated",
-	"agents_rules_cache_hits":     "AGENTS.md cache hits",
-	"agents_rules_new":            "AGENTS.md newly evaluated",
-	"skill_candidates_cache_hits": "Skill candidate cache hits",
-	"skill_candidates_new":        "Skill candidates newly evaluated",
-	"prompt_quality":              "Prompt quality improvements",
-	"agents_recommendations":      "Concrete AGENTS.md recommendations",
-	"skill_candidates":            "Reusable Skill candidates",
-	"supporting_cases":            "supporting cases",
-	"usefulness":                  "Usefulness",
+func lookupEffectivenessCohorts(key string) (string, string, bool) {
+	switch key {
+	case "effectiveness":
+		return "Model and reasoning effectiveness", "Эффективность модели и глубины рассуждений", true
+	case "effectiveness_insufficient":
+		return "Insufficient cohort evidence for a comparison (minimum 10 samples per cohort).", "Недостаточно данных для сравнения когорт (минимум 10 наблюдений в каждой).", true
+	case "effectiveness_caveat":
+		return "These are associations, not causal effects; harder tasks may be routed to higher reasoning levels.", "Это взаимосвязь, а не причинный эффект: более сложные задачи могут направляться на более глубокие уровни рассуждений.", true
+	case "subagent_effectiveness":
+		return "Subagent effectiveness", "Эффективность субагентов", true
+	case "subagent_selection_bias":
+		return "Selection bias warning: difficult tasks are more likely to use subagents, so this comparison does not establish that subagents help or hurt.", "Предупреждение о смещении выборки: сложные задачи чаще используют субагентов, поэтому сравнение не доказывает, что субагенты помогают или вредят.", true
+	case "with_subagents":
+		return "With subagents", "С субагентами", true
+	case "without_subagents":
+		return "Without subagents", "Без субагентов", true
+	case "samples":
+		return "samples", "наблюдений", true
+	case "steering_rate":
+		return "steering", "корректировки", true
+	case "average_tokens":
+		return "avg tokens", "средние токены", true
+	case "average_seconds":
+		return "avg seconds", "средние секунды", true
+	default:
+		return "", "", false
+	}
 }
 
-var russianRecommendations = map[string]string{
-	"running_prevention":          "Анализируем способы снижения корректировок...",
-	"running_validation":          "Анализируем недостающие проверки...",
-	"running_prompt_quality":      "Анализируем качество постановок...",
-	"running_agents_rules":        "Формируем рекомендации для AGENTS.md...",
-	"running_skill_candidates":    "Ищем переиспользуемые Skill...",
-	"prevention_cache_hits":       "Способов предотвращения из кеша",
-	"prevention_new":              "Новых оценок предотвращения",
-	"validation_cache_hits":       "Проверок из кеша",
-	"validation_new":              "Новых оценок проверок",
-	"prompt_quality_cache_hits":   "Постановок из кеша",
-	"prompt_quality_new":          "Новых оценок постановок",
-	"agents_rules_cache_hits":     "Правил AGENTS.md из кеша",
-	"agents_rules_new":            "Новых оценок правил AGENTS.md",
-	"skill_candidates_cache_hits": "Кандидатов Skill из кеша",
-	"skill_candidates_new":        "Новых оценок кандидатов Skill",
-	"prompt_quality":              "Как улучшить постановку задачи",
-	"agents_recommendations":      "Конкретные рекомендации для AGENTS.md",
-	"skill_candidates":            "Переиспользуемые кандидаты Skill",
-	"supporting_cases":            "подтверждающих случаев",
-	"usefulness":                  "Польза",
+func lookupEffectivenessInsights(key string) (string, string, bool) {
+	switch key {
+	case "average_tool_calls":
+		return "avg tool calls", "средние вызовы инструментов", true
+	case "insights_summary":
+		return "Summary", "Итог", true
+	case "insights_strengths":
+		return "Strengths", "Сильные стороны", true
+	case "insights_weaknesses":
+		return "Weaknesses", "Слабые стороны", true
+	case "insights_high":
+		return "High-priority recommendations", "Рекомендации высокого приоритета", true
+	case "insights_medium":
+		return "Medium-priority recommendations", "Рекомендации среднего приоритета", true
+	case "insights_low":
+		return "Low-priority recommendations", "Рекомендации низкого приоритета", true
+	case "insights_limited":
+		return "Evidence is limited; no reliable cohort comparison is available yet.", "Данных мало: надёжное сравнение когорт пока невозможно.", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupGoldenExport(key string) (string, string, bool) {
+	switch key {
+	case "golden_export_title":
+		return "Golden fixture candidate exported", "Кандидат golden-фикстуры экспортирован", true
+	case "golden_candidate_cases":
+		return "Candidate cases", "Кандидатов", true
+	case "golden_output":
+		return "Output", "Файл", true
+	case "golden_local_only":
+		return "Only minimized, automatically redacted local data was written; no Judge was called. Review the candidate locally because redaction is not a guarantee of secrecy. Human approval is required before evaluation.", "Записаны только минимизированные локальные данные с автоматической очисткой; оценщик не вызывался. Проверьте кандидат локально: очистка не гарантирует удаления всех секретов. Перед оценкой требуется одобрение человека.", true
+	case "golden_evaluate_title":
+		return "Golden fixture evaluation", "Оценка golden-фикстуры", true
+	case "golden_methodology_warning":
+		return "Warning: fixture methodology differs from current (%s / %s / %s vs %s / %s / %s); evaluation uses the current methodology.", "Внимание: методология фикстуры отличается от текущей (%s / %s / %s вместо %s / %s / %s); используется текущая методология.", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupGoldenFields(key string) (string, string, bool) {
+	switch key {
+	case "golden_field_task_type":
+		return "task type", "тип задачи", true
+	case "golden_field_followup":
+		return "follow-up label", "метка продолжения", true
+	case "golden_field_steering_reason":
+		return "steering reason", "причина корректировки", true
+	case "golden_field_prompt_issue":
+		return "prompt issue", "проблема постановки", true
+	case "golden_field_agents_rule":
+		return "AGENTS.md rule", "правило AGENTS.md", true
+	case "golden_field_skill_candidate":
+		return "Skill candidate", "кандидат Skill", true
+	case "golden_field_validation_type":
+		return "validation type", "тип проверки", true
+	case "golden_field_prevention":
+		return "prevention mechanisms", "механизмы предотвращения", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupGoldenMetrics(key string) (string, string, bool) {
+	switch key {
+	case "golden_samples":
+		return "samples", "наблюдений", true
+	case "golden_exact":
+		return "exact matches", "точных совпадений", true
+	case "golden_precision":
+		return "precision", "точность", true
+	case "golden_recall":
+		return "recall", "полнота", true
+	case "golden_f1":
+		return "F1", "F1", true
+	case "golden_expected":
+		return "expected", "ожидалось", true
+	case "golden_predicted":
+		return "predicted", "получено", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupHistorical(key string) (string, string, bool) {
+	switch key {
+	case "historical_guard":
+		return "Historical aggregate regression guard", "Проверка исторического агрегированного эталона", true
+	case "historical_pass":
+		return "PASS", "ПРОЙДЕНО", true
+	case "historical_warning":
+		return "WARNING (semantic drift)", "ПРЕДУПРЕЖДЕНИЕ (семантический дрейф)", true
+	case "historical_fail":
+		return "FAIL", "ОШИБКА", true
+	case "historical_deterministic_mismatch":
+		return "deterministic mismatch", "расхождение детерминированных данных", true
+	case "historical_semantic_warning":
+		return "semantic tolerance warning", "предупреждение о допуске семантики", true
+	case "historical_calibration_warning":
+		return "Calibration required: historical reference uses %s; current methodology is %s. Follow-up and semantic metrics are uncalibrated.", "Требуется калибровка: исторический эталон использует %s; текущая методология — %s. Метрики продолжений и семантики не откалиброваны.", true
+	default:
+		return "", "", false
+	}
 }

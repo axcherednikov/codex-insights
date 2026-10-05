@@ -13,6 +13,8 @@ import (
 
 const steeringCacheVersion = "steering-v1"
 
+const steeringBatchSize = 10
+
 type SteeringResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
 	Label          string  `json:"label"`
@@ -38,13 +40,13 @@ type SteeringAnalyzer struct {
 func NewSteeringAnalyzer() (SteeringAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return SteeringAnalyzer{}, err
+		return SteeringAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
 
 	return SteeringAnalyzer{
 		runner:    judge.New(),
 		cache:     store,
-		batchSize: 10,
+		batchSize: steeringBatchSize,
 	}, nil
 }
 
@@ -55,27 +57,64 @@ func (a SteeringAnalyzer) Analyze(
 		Results: make([]SteeringResult, 0, len(followups)),
 	}
 
-	resultsByTurn := make(
-		map[string]SteeringResult,
-		len(followups),
-	)
+	resultsByTurn, pending, cacheHits := a.selectPending(followups)
+	analysis.CacheHits = cacheHits
 
-	pending := make([]sessions.Followup, 0, len(followups))
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return SteeringAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
 
-	for _, followup := range followups {
+	analysis.Results, err = assembleSteeringAnalysis(followups, resultsByTurn)
+	if err != nil {
+		return SteeringAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a SteeringAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]SteeringResult, []sessions.Followup, int) {
+	resultsByTurn := make(map[string]SteeringResult, len(cases))
+	pending := make([]sessions.Followup, 0, len(cases))
+	cacheHits := 0
+	for _, followup := range cases {
 		var cached SteeringResult
-
-		if a.cache != nil &&
-			a.cache.Get(steeringCacheKey(followup), &cached) &&
-			cached.PreviousTurnID == followup.PreviousTurnID {
-
+		if a.cache != nil && a.cache.Get(steeringCacheKey(followup), &cached) && cached.PreviousTurnID == followup.PreviousTurnID {
 			resultsByTurn[followup.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
-
 		pending = append(pending, followup)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assembleSteeringAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]SteeringResult,
+) ([]SteeringResult, error) {
+	results := make([]SteeringResult, 0, len(cases))
+	for _, followup := range cases {
+		result, ok := resultsByTurn[followup.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingSteeringResult, followup.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a SteeringAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]SteeringResult,
+) (int, error) {
+	var evaluated int
 
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
@@ -87,7 +126,7 @@ func (a SteeringAnalyzer) Analyze(
 
 		batchResults, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return SteeringAnalysis{}, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"analyze follow-up batch %d-%d: %w",
 				start,
 				end,
@@ -95,7 +134,7 @@ func (a SteeringAnalyzer) Analyze(
 			)
 		}
 
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 
 		for _, result := range batchResults {
 			resultsByTurn[result.PreviousTurnID] = result
@@ -112,29 +151,17 @@ func (a SteeringAnalyzer) Analyze(
 					steeringCacheKey(followup),
 					result,
 				); err != nil {
-					return SteeringAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 
 			if err := a.cache.Save(); err != nil {
-				return SteeringAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
 
-	for _, followup := range followups {
-		result, ok := resultsByTurn[followup.PreviousTurnID]
-		if !ok {
-			return SteeringAnalysis{}, fmt.Errorf(
-				"missing steering result for turn %q",
-				followup.PreviousTurnID,
-			)
-		}
-
-		analysis.Results = append(analysis.Results, result)
-	}
-
-	return analysis, nil
+	return evaluated, nil
 }
 
 func (a SteeringAnalyzer) analyzeBatch(
@@ -156,10 +183,8 @@ func (a SteeringAnalyzer) analyzeBatch(
 		})
 	}
 
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal follow-ups: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 
 	prompt := `Classify every conversation follow-up.
 
@@ -183,7 +208,7 @@ Records:
 		steeringSchema(),
 		&response,
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 
 	if err := validateSteeringResults(
@@ -210,35 +235,22 @@ func validateSteeringResults(
 
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return fmt.Errorf(
-				"judge returned unexpected turn id %q",
-				result.PreviousTurnID,
-			)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return fmt.Errorf(
-				"judge returned duplicate turn id %q",
-				result.PreviousTurnID,
-			)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 
 		if !isSteeringLabel(result.Label) {
-			return fmt.Errorf(
-				"judge returned unsupported steering label %q",
-				result.Label,
-			)
+			return fmt.Errorf("%w %q", errUnsupportedSteeringLabel, result.Label)
 		}
 
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 
 	if len(seen) != len(expected) {
-		return fmt.Errorf(
-			"judge returned %d results, expected %d",
-			len(seen),
-			len(expected),
-		)
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
 
 	return nil

@@ -3,10 +3,15 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
-	"os"
+	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"github.com/axcherednikov/codex-insights/internal/fileio"
 )
+
+const turnMaxLineSize = 16 * 1024 * 1024
 
 type Turn struct {
 	ID            string
@@ -32,8 +37,7 @@ type eventPayload struct {
 	TurnID     string `json:"turn_id"`
 	DurationMS int64  `json:"duration_ms"`
 	TTFTMS     int64  `json:"time_to_first_token_ms"`
-
-	Info *struct {
+	Info       *struct {
 		TotalTokenUsage struct {
 			TotalTokens int64 `json:"total_tokens"`
 		} `json:"total_token_usage"`
@@ -52,129 +56,153 @@ type responsePayload struct {
 	ToolName string `json:"tool_name"`
 }
 
+type turnParser struct {
+	before     time.Time
+	turns      []Turn
+	current    *Turn
+	startTotal int64
+	lastTotal  int64
+}
+
 func ParseTurns(path string, before time.Time) ([]Turn, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+	parser := turnParser{before: before}
+	if err := fileio.Read(path, parser.scan); err != nil {
+		return nil, fmt.Errorf("parse turns from %q: %w", path, err)
 	}
-	defer f.Close()
 
-	var (
-		turns      []Turn
-		current    *Turn
-		startTotal int64
-		lastTotal  int64
-	)
+	return parser.finish(), nil
+}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-
+func (p *turnParser) scan(reader io.Reader) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, scannerInitialCapacity), turnMaxLineSize)
 	for scanner.Scan() {
-		var record rawRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			continue
-		}
-
-		if !before.IsZero() && record.Timestamp != "" {
-			recordTime, err := time.Parse(time.RFC3339Nano, record.Timestamp)
-			if err == nil && recordTime.After(before) {
-				continue
-			}
-		}
-
-		switch record.Type {
-		case "event_msg":
-			var payload eventPayload
-			if err := json.Unmarshal(record.Payload, &payload); err != nil {
-				continue
-			}
-
-			switch payload.Type {
-			case "task_started":
-				current = &Turn{
-					ID:        payload.TurnID,
-					Status:    "incomplete",
-					Model:     "unknown",
-					Effort:    "unknown",
-					StartedAt: record.Timestamp,
-				}
-				startTotal = lastTotal
-
-			case "token_count":
-				if payload.Info != nil {
-					lastTotal = payload.Info.TotalTokenUsage.TotalTokens
-				}
-
-			case "task_complete":
-				if current != nil {
-					current.Status = "complete"
-					current.Tokens = lastTotal - startTotal
-					current.DurationMS = payload.DurationMS
-					current.TTFTMS = payload.TTFTMS
-					turns = append(turns, *current)
-					current = nil
-				}
-
-			case "turn_aborted":
-				if current != nil {
-					current.Status = "aborted"
-					current.Tokens = lastTotal - startTotal
-					current.DurationMS = payload.DurationMS
-					turns = append(turns, *current)
-					current = nil
-				}
-			}
-
-		case "turn_context":
-			if current == nil {
-				continue
-			}
-
-			var payload turnContextPayload
-			if err := json.Unmarshal(record.Payload, &payload); err != nil {
-				continue
-			}
-
-			if payload.TurnID == current.ID {
-				if payload.Model != "" {
-					current.Model = payload.Model
-				}
-
-				if payload.Effort != "" {
-					current.Effort = payload.Effort
-				}
-			}
-
-		case "response_item":
-			if current == nil {
-				continue
-			}
-
-			var payload responsePayload
-			if err := json.Unmarshal(record.Payload, &payload); err != nil {
-				continue
-			}
-
-			if payload.Type == "function_call" ||
-				payload.Type == "custom_tool_call" {
-				current.ToolCalls++
-				if isSpawnAgentTool(payload.Name) || isSpawnAgentTool(payload.ToolName) {
-					current.UsesSubagents = true
-				}
-			}
-		}
+		p.parseLine(scanner.Bytes())
 	}
-
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return fmt.Errorf("scan turn records: %w", err)
 	}
 
-	if current != nil {
-		current.Tokens = lastTotal - startTotal
-		turns = append(turns, *current)
+	return nil
+}
+
+func (p *turnParser) parseLine(line []byte) {
+	var record rawRecord
+	if json.Unmarshal(line, &record) != nil || !p.isWithinCutoff(record.Timestamp) {
+		return
 	}
 
-	return turns, nil
+	switch record.Type {
+	case "event_msg":
+		p.parseEvent(record.Payload, record.Timestamp)
+	case "turn_context":
+		p.parseContext(record.Payload)
+	case "response_item":
+		p.parseResponse(record.Payload)
+	}
+}
+
+func (p *turnParser) isWithinCutoff(timestamp string) bool {
+	if p.before.IsZero() || timestamp == "" {
+		return true
+	}
+
+	recordTime, err := time.Parse(time.RFC3339Nano, timestamp)
+
+	return err != nil || !recordTime.After(p.before)
+}
+
+func (p *turnParser) parseEvent(data json.RawMessage, timestamp string) {
+	var payload eventPayload
+	if json.Unmarshal(data, &payload) != nil {
+		return
+	}
+	p.applyEvent(payload, timestamp)
+}
+
+func (p *turnParser) applyEvent(payload eventPayload, timestamp string) {
+	switch payload.Type {
+	case "task_started":
+		p.start(payload.TurnID, timestamp)
+	case "token_count":
+		p.updateTokenTotal(payload)
+	case "task_complete":
+		p.complete(payload, true)
+	case "turn_aborted":
+		p.complete(payload, false)
+	}
+}
+
+func (p *turnParser) start(id, timestamp string) {
+	p.current = &Turn{
+		ID: id, Status: "incomplete", Model: "unknown", Effort: "unknown", StartedAt: timestamp,
+	}
+	p.startTotal = p.lastTotal
+}
+
+func (p *turnParser) updateTokenTotal(payload eventPayload) {
+	if payload.Info != nil {
+		p.lastTotal = payload.Info.TotalTokenUsage.TotalTokens
+	}
+}
+
+func (p *turnParser) complete(payload eventPayload, completed bool) {
+	if p.current == nil {
+		return
+	}
+	p.current.Tokens = p.lastTotal - p.startTotal
+	p.current.DurationMS = payload.DurationMS
+	if completed {
+		p.current.Status = "complete"
+		p.current.TTFTMS = payload.TTFTMS
+	} else {
+		p.current.Status = "aborted"
+	}
+	p.turns = append(p.turns, *p.current)
+	p.current = nil
+}
+
+func (p *turnParser) parseContext(data json.RawMessage) {
+	if p.current == nil {
+		return
+	}
+	var payload turnContextPayload
+	if json.Unmarshal(data, &payload) != nil || payload.TurnID != p.current.ID {
+		return
+	}
+	if payload.Model != "" {
+		p.current.Model = payload.Model
+	}
+	if payload.Effort != "" {
+		p.current.Effort = payload.Effort
+	}
+}
+
+func (p *turnParser) parseResponse(data json.RawMessage) {
+	if p.current == nil {
+		return
+	}
+	var payload responsePayload
+	if json.Unmarshal(data, &payload) != nil || !isToolCall(payload.Type) {
+		return
+	}
+	p.current.ToolCalls++
+	if isSpawnAgentTool(payload.Name) || isSpawnAgentTool(payload.ToolName) {
+		p.current.UsesSubagents = true
+	}
+}
+
+func isToolCall(recordType string) bool {
+	return recordType == "function_call" || recordType == "custom_tool_call"
+}
+
+func (p *turnParser) finish() []Turn {
+	if p.current != nil {
+		p.current.Tokens = p.lastTotal - p.startTotal
+		p.turns = append(p.turns, *p.current)
+	}
+
+	return p.turns
 }
 
 func isSpawnAgentTool(name string) bool {
@@ -182,6 +210,7 @@ func isSpawnAgentTool(name string) bool {
 	if name == "spawn_agent" {
 		return true
 	}
+
 	return strings.HasSuffix(name, ".spawn_agent") ||
 		strings.HasSuffix(name, "/spawn_agent") ||
 		strings.HasSuffix(name, ":spawn_agent") ||

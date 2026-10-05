@@ -1,29 +1,22 @@
 package i18n
 
 func (t Translator) PreventionMechanism(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianPreventionMechanisms[value]; ok {
-			return translated
-		}
-	}
+	english, russian, found := preventionMechanismTranslation(value)
 
-	if translated, ok := englishPreventionMechanisms[value]; ok {
-		return translated
-	}
-
-	return value
+	return localized(t.Language, english, russian, found, value)
 }
 
-var englishPreventionMechanisms = map[string]string{
-	"validation":  "Validation",
-	"agents_md":   "AGENTS.md rules",
-	"task_prompt": "Task prompt",
-	"skill":       "Skill",
-}
-
-var russianPreventionMechanisms = map[string]string{
-	"validation":  "Автоматическая проверка",
-	"agents_md":   "Правила AGENTS.md",
-	"task_prompt": "Постановка задачи",
-	"skill":       "Skill",
+func preventionMechanismTranslation(key string) (string, string, bool) {
+	switch key {
+	case "agents_md":
+		return "AGENTS.md rules", "Правила AGENTS.md", true
+	case "skill":
+		return "Skill", "Skill", true
+	case "task_prompt":
+		return "Task prompt", "Постановка задачи", true
+	case "validation":
+		return "Validation", "Автоматическая проверка", true
+	default:
+		return "", "", false
+	}
 }

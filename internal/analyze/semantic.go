@@ -29,6 +29,12 @@ const (
 	SemanticDefaultBatchSize   = 20
 	semanticMaxBatchBytes      = 512 * 1024
 	semanticMaxTextBytes       = 24 * 1024
+	semanticDefaultMaxRetries  = 2
+	semanticBackoffCap         = 5 * time.Second
+	semanticBackoffExponent    = 1
+	semanticBatchSplitDivisor  = 2
+	semanticTruncationDivisor  = 2
+	semanticJSONArrayBytes     = 2
 	semanticTruncationLabel    = "[truncated for semantic analysis]"
 	semanticTruncationMarker   = "\n..." + semanticTruncationLabel + "...\n"
 	semanticRecordsPrefix      = "\n\nRecords:\n"
@@ -63,6 +69,7 @@ func NewSemanticInput(task sessions.Interaction, followup *sessions.Followup) Se
 			PreviousAnswer: followup.PreviousAnswer,
 		}
 	}
+
 	return input
 }
 
@@ -84,6 +91,7 @@ func BuildSemanticInputs(interactions []sessions.Interaction, followups []sessio
 		}
 		result = append(result, NewSemanticInput(task, followup))
 	}
+
 	return result
 }
 
@@ -131,6 +139,7 @@ func (r SemanticResult) ToTaskTypeResultIfAvailable() (TaskTypeResult, bool) {
 	if r.TaskType == "" {
 		return TaskTypeResult{}, false
 	}
+
 	return r.ToTaskTypeResult(), true
 }
 
@@ -140,6 +149,7 @@ func (r SemanticResult) ToSteeringResult() (SteeringResult, bool) {
 	if r.FollowupLabel == "" {
 		return SteeringResult{}, false
 	}
+
 	return SteeringResult{PreviousTurnID: r.followupID(), Label: r.FollowupLabel, Confidence: r.FollowupConfidence}, true
 }
 
@@ -147,6 +157,7 @@ func (r SemanticResult) ToSteeringReasonResult() (SteeringReasonResult, bool) {
 	if r.SteeringReason == "" {
 		return SteeringReasonResult{}, false
 	}
+
 	return SteeringReasonResult{PreviousTurnID: r.followupID(), Reason: r.SteeringReason, Confidence: r.SteeringReasonConfidence}, true
 }
 
@@ -154,6 +165,7 @@ func (r SemanticResult) ToPreventionResult() (PreventionResult, bool) {
 	if r.FollowupLabel != "steering" {
 		return PreventionResult{}, false
 	}
+
 	return PreventionResult{PreviousTurnID: r.followupID(), Applicable: append([]string(nil), r.PreventionMechanisms...), NotPreventable: r.NotPreventable, Confidence: r.PreventionConfidence}, true
 }
 
@@ -161,6 +173,7 @@ func (r SemanticResult) ToPromptQualityResult() (PromptQualityResult, bool) {
 	if r.PromptIssue == "" {
 		return PromptQualityResult{}, false
 	}
+
 	return PromptQualityResult{PreviousTurnID: r.followupID(), Issue: r.PromptIssue, Confidence: r.PromptIssueConfidence}, true
 }
 
@@ -168,6 +181,7 @@ func (r SemanticResult) ToAgentsRuleResult() (AgentsRuleResult, bool) {
 	if r.AgentsRule == "" {
 		return AgentsRuleResult{}, false
 	}
+
 	return AgentsRuleResult{PreviousTurnID: r.followupID(), Rule: r.AgentsRule, Confidence: r.AgentsRuleConfidence}, true
 }
 
@@ -175,6 +189,7 @@ func (r SemanticResult) ToSkillCandidateResult() (SkillCandidateResult, bool) {
 	if r.SkillCandidate == "" {
 		return SkillCandidateResult{}, false
 	}
+
 	return SkillCandidateResult{PreviousTurnID: r.followupID(), Category: r.SkillCandidate, Confidence: r.SkillConfidence}, true
 }
 
@@ -182,6 +197,7 @@ func (r SemanticResult) ToValidationResult() (ValidationResult, bool) {
 	if r.ValidationType == "" {
 		return ValidationResult{}, false
 	}
+
 	return ValidationResult{PreviousTurnID: r.followupID(), ValidationType: r.ValidationType, Confidence: r.ValidationConfidence}, true
 }
 
@@ -249,9 +265,10 @@ type SemanticProgress = SemanticStats
 
 func DefaultSemanticConfig() SemanticConfig {
 	runner := judge.New()
+
 	return SemanticConfig{
 		Runner: runner, Workers: SemanticDefaultWorkers, BatchSize: SemanticDefaultBatchSize,
-		MaxRetries: 2, RetryBackoff: defaultSemanticBackoff,
+		MaxRetries: semanticDefaultMaxRetries, RetryBackoff: defaultSemanticBackoff,
 		Model: runner.Model, Effort: runner.Effort,
 		MethodologyVersion: SemanticMethodologyVersion, PromptVersion: SemanticPromptVersion, SchemaVersion: SemanticSchemaVersion,
 	}
@@ -261,10 +278,11 @@ func defaultSemanticBackoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := time.Second * time.Duration(1<<(attempt-1))
-	if delay > 5*time.Second {
-		return 5 * time.Second
+	delay := time.Second * time.Duration(1<<(attempt-semanticBackoffExponent))
+	if delay > semanticBackoffCap {
+		return semanticBackoffCap
 	}
+
 	return delay
 }
 
@@ -272,6 +290,13 @@ type SemanticEngine struct{ config SemanticConfig }
 
 func NewSemanticEngine(config SemanticConfig) *SemanticEngine {
 	defaults := DefaultSemanticConfig()
+	applySemanticExecutionDefaults(&config, defaults)
+	applySemanticModelDefaults(&config, defaults)
+
+	return &SemanticEngine{config: config}
+}
+
+func applySemanticExecutionDefaults(config *SemanticConfig, defaults SemanticConfig) {
 	if config.Runner == nil {
 		config.Runner = defaults.Runner
 	}
@@ -293,6 +318,9 @@ func NewSemanticEngine(config SemanticConfig) *SemanticEngine {
 	if config.RetryBackoff == nil {
 		config.RetryBackoff = defaults.RetryBackoff
 	}
+}
+
+func applySemanticModelDefaults(config *SemanticConfig, defaults SemanticConfig) {
 	if config.Model == "" {
 		config.Model = defaults.Model
 	}
@@ -308,7 +336,6 @@ func NewSemanticEngine(config SemanticConfig) *SemanticEngine {
 	if config.SchemaVersion == "" {
 		config.SchemaVersion = defaults.SchemaVersion
 	}
-	return &SemanticEngine{config: config}
 }
 
 func NewSemanticAnalyzer(config SemanticConfig) *SemanticEngine { return NewSemanticEngine(config) }
@@ -316,10 +343,11 @@ func NewSemanticAnalyzer(config SemanticConfig) *SemanticEngine { return NewSema
 func NewDefaultSemanticEngine() (*SemanticEngine, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open semantic cache: %w", err)
 	}
 	config := DefaultSemanticConfig()
 	config.Cache = store
+
 	return NewSemanticEngine(config), nil
 }
 
@@ -357,103 +385,200 @@ type semanticJudgeResult struct {
 }
 
 func validateSemanticJudgePresence(input SemanticInput, result semanticJudgeResult) error {
+	if err := validateSemanticTaskPresence(input, result); err != nil {
+		return err
+	}
+
+	return validateSemanticFollowupPresence(input, result)
+}
+
+func validateSemanticTaskPresence(input SemanticInput, result semanticJudgeResult) error {
 	if input.Prompt == "" {
 		if result.TaskType != nil || result.TaskConfidence != nil {
-			return fmt.Errorf("turn %q has task classification despite unavailable prompt", input.TurnID)
+			return semanticTurnErrorMessage(errSemanticTaskWhenPromptMissing, input.TurnID, "has task classification despite unavailable prompt")
 		}
-	} else {
-		if result.TaskType == nil || *result.TaskType == "" || result.TaskConfidence == nil {
-			return fmt.Errorf("turn %q requires task type and confidence", input.TurnID)
-		}
-	}
-	label := ""
-	if result.FollowupLabel != nil {
-		label = *result.FollowupLabel
-	}
-	if input.Followup == nil {
-		if result.NotPreventable == nil {
-			return fmt.Errorf("turn %q is missing required not_preventable field", input.TurnID)
-		}
-		if label != "" || result.FollowupConfidence != nil || result.SteeringReason != nil || result.SteeringReasonConfidence != nil || len(result.PreventionMechanisms) != 0 || *result.NotPreventable || result.PreventionConfidence != nil || result.PromptIssue != nil || result.PromptIssueConfidence != nil || result.AgentsRule != nil || result.AgentsRuleConfidence != nil || result.SkillCandidate != nil || result.SkillConfidence != nil || result.ValidationType != nil || result.ValidationConfidence != nil {
-			return fmt.Errorf("turn %q has non-null follow-up fields without a follow-up", input.TurnID)
-		}
+
 		return nil
 	}
-	if result.FollowupLabel == nil || label == "" || result.FollowupConfidence == nil {
-		return fmt.Errorf("turn %q requires follow-up label and confidence", input.TurnID)
+	if result.TaskType == nil || *result.TaskType == "" || result.TaskConfidence == nil {
+		return semanticTurnErrorMessage(errSemanticTaskAndConfidenceRequired, input.TurnID, "requires task type and confidence")
 	}
-	if label != "steering" {
-		if result.NotPreventable == nil {
-			return fmt.Errorf("turn %q is missing required not_preventable field", input.TurnID)
-		}
-		if result.SteeringReason != nil || result.SteeringReasonConfidence != nil || len(result.PreventionMechanisms) != 0 || *result.NotPreventable || result.PreventionConfidence != nil || result.PromptIssue != nil || result.PromptIssueConfidence != nil || result.AgentsRule != nil || result.AgentsRuleConfidence != nil || result.SkillCandidate != nil || result.SkillConfidence != nil || result.ValidationType != nil || result.ValidationConfidence != nil {
-			return fmt.Errorf("turn %q has non-null steering-only fields for non-steering follow-up", input.TurnID)
-		}
-		return nil
-	}
-	if result.SteeringReason == nil || *result.SteeringReason == "" || result.SteeringReasonConfidence == nil {
-		return fmt.Errorf("turn %q requires steering reason and confidence", input.TurnID)
-	}
-	if result.NotPreventable == nil {
-		return fmt.Errorf("turn %q requires not_preventable", input.TurnID)
-	}
-	if len(result.PreventionMechanisms) == 0 {
-		if *result.NotPreventable && result.PreventionConfidence != nil {
-			return fmt.Errorf("turn %q has prevention confidence without mechanisms", input.TurnID)
-		}
-		if !*result.NotPreventable {
-			return fmt.Errorf("turn %q must mark no mechanisms as not preventable", input.TurnID)
-		}
-	} else if result.PreventionConfidence == nil {
-		return fmt.Errorf("turn %q requires prevention confidence with mechanisms", input.TurnID)
-	}
-	for _, conditional := range []struct {
-		mechanism  string
-		value      *string
-		confidence *float64
-	}{
-		{"task_prompt", result.PromptIssue, result.PromptIssueConfidence},
-		{"agents_md", result.AgentsRule, result.AgentsRuleConfidence},
-		{"skill", result.SkillCandidate, result.SkillConfidence},
-		{"validation", result.ValidationType, result.ValidationConfidence},
-	} {
-		applies := containsString(result.PreventionMechanisms, conditional.mechanism)
-		if applies && (conditional.value == nil || *conditional.value == "" || conditional.confidence == nil) {
-			return fmt.Errorf("turn %q requires %s classification and confidence", input.TurnID, conditional.mechanism)
-		}
-		if !applies && (conditional.value != nil || conditional.confidence != nil) {
-			return fmt.Errorf("turn %q has %s classification without its prevention mechanism", input.TurnID, conditional.mechanism)
-		}
-	}
+
 	return nil
 }
 
+func validateSemanticFollowupPresence(input SemanticInput, result semanticJudgeResult) error {
+	label := semanticJudgeString(result.FollowupLabel)
+	if input.Followup == nil {
+		return validateSemanticAbsentFollowupPresence(input.TurnID, label, result)
+	}
+	if result.FollowupLabel == nil || label == "" || result.FollowupConfidence == nil {
+		return semanticTurnErrorMessage(errSemanticFollowupAndConfidenceRequired, input.TurnID, "requires follow-up label and confidence")
+	}
+	if label != "steering" {
+		return validateSemanticNonSteeringPresence(input.TurnID, result)
+	}
+
+	return validateSemanticSteeringPresence(input.TurnID, result)
+}
+
+func semanticJudgeString(value *string) string {
+	if value == nil {
+		return ""
+	}
+
+	return *value
+}
+
+func validateSemanticAbsentFollowupPresence(turnID, label string, result semanticJudgeResult) error {
+	if result.NotPreventable == nil {
+		return semanticTurnErrorMessage(errSemanticNotPreventableMissing, turnID, "is missing required not_preventable field")
+	}
+	if hasSemanticJudgeFollowupFields(label, result) {
+		return semanticTurnErrorMessage(errSemanticFollowupFieldsWithoutFollowup, turnID, "has non-null follow-up fields without a follow-up")
+	}
+
+	return nil
+}
+
+func hasSemanticJudgeFollowupFields(label string, result semanticJudgeResult) bool {
+	return label != "" || result.FollowupConfidence != nil || hasSemanticJudgeSteeringFields(result)
+}
+
+func validateSemanticNonSteeringPresence(turnID string, result semanticJudgeResult) error {
+	if result.NotPreventable == nil {
+		return semanticTurnErrorMessage(errSemanticNotPreventableMissing, turnID, "is missing required not_preventable field")
+	}
+	if hasSemanticJudgeSteeringFields(result) {
+		return semanticTurnErrorMessage(errSemanticSteeringFieldsForOtherLabel, turnID, "has non-null steering-only fields for non-steering follow-up")
+	}
+
+	return nil
+}
+
+func hasSemanticJudgeSteeringFields(result semanticJudgeResult) bool {
+	return result.SteeringReason != nil || result.SteeringReasonConfidence != nil || len(result.PreventionMechanisms) != 0 ||
+		*result.NotPreventable || result.PreventionConfidence != nil || result.PromptIssue != nil || result.PromptIssueConfidence != nil ||
+		result.AgentsRule != nil || result.AgentsRuleConfidence != nil || result.SkillCandidate != nil ||
+		result.SkillConfidence != nil || result.ValidationType != nil || result.ValidationConfidence != nil
+}
+
+func validateSemanticSteeringPresence(turnID string, result semanticJudgeResult) error {
+	if result.SteeringReason == nil || *result.SteeringReason == "" || result.SteeringReasonConfidence == nil {
+		return semanticTurnErrorMessage(errSemanticSteeringReasonAndConfidenceRequired, turnID, "requires steering reason and confidence")
+	}
+	if result.NotPreventable == nil {
+		return semanticTurnErrorMessage(errSemanticNotPreventableRequired, turnID, "requires not_preventable")
+	}
+	if err := validateSemanticPresencePrevention(turnID, result); err != nil {
+		return err
+	}
+
+	return validateSemanticConditionalPresence(turnID, result)
+}
+
+func validateSemanticPresencePrevention(turnID string, result semanticJudgeResult) error {
+	if len(result.PreventionMechanisms) == 0 {
+		if *result.NotPreventable && result.PreventionConfidence != nil {
+			return semanticTurnErrorMessage(errSemanticPreventionConfidenceWithoutMechanism, turnID, "has prevention confidence without mechanisms")
+		}
+		if !*result.NotPreventable {
+			return semanticTurnErrorMessage(errSemanticEmptyMechanismMustBeNotPreventable, turnID, "must mark no mechanisms as not preventable")
+		}
+
+		return nil
+	}
+	if result.PreventionConfidence == nil {
+		return semanticTurnErrorMessage(errSemanticPreventionConfidenceRequired, turnID, "requires prevention confidence with mechanisms")
+	}
+
+	return nil
+}
+
+func validateSemanticConditionalPresence(turnID string, result semanticJudgeResult) error {
+	for _, conditional := range semanticJudgeConditionals(result) {
+		applies := containsString(result.PreventionMechanisms, conditional.mechanism)
+		if applies && (conditional.value == nil || *conditional.value == "" || conditional.confidence == nil) {
+			return fmt.Errorf("%w %q requires %s classification and confidence", errSemanticConditionalClassificationRequired, turnID, conditional.mechanism)
+		}
+		if !applies && (conditional.value != nil || conditional.confidence != nil) {
+			return fmt.Errorf("%w %q has %s classification without its prevention mechanism", errSemanticClassificationWithoutMechanism, turnID, conditional.mechanism)
+		}
+	}
+
+	return nil
+}
+
+type semanticJudgeConditional struct {
+	mechanism  string
+	value      *string
+	confidence *float64
+}
+
+func semanticJudgeConditionals(result semanticJudgeResult) []semanticJudgeConditional {
+	return []semanticJudgeConditional{
+		{mechanism: "task_prompt", value: result.PromptIssue, confidence: result.PromptIssueConfidence},
+		{mechanism: "agents_md", value: result.AgentsRule, confidence: result.AgentsRuleConfidence},
+		{mechanism: "skill", value: result.SkillCandidate, confidence: result.SkillConfidence},
+		{mechanism: "validation", value: result.ValidationType, confidence: result.ValidationConfidence},
+	}
+}
+
+func semanticTurnErrorMessage(identity semanticTurnError, turnID, message string) error {
+	return fmt.Errorf("%w %q %s", identity, turnID, message)
+}
+
 func semanticResultFromJudge(result semanticJudgeResult) SemanticResult {
-	out := SemanticResult{TurnID: result.TurnID, PreventionMechanisms: append([]string(nil), result.PreventionMechanisms...)}
+	out := SemanticResult{
+		TurnID:               result.TurnID,
+		PreventionMechanisms: append([]string(nil), result.PreventionMechanisms...),
+	}
+	copySemanticTaskFields(&out, result)
+	copySemanticFollowupFields(&out, result)
+	copySemanticSteeringFields(&out, result)
+	copySemanticPreventionFields(&out, result)
+	copySemanticClassificationFields(&out, result)
+
+	return out
+}
+
+func copySemanticTaskFields(out *SemanticResult, result semanticJudgeResult) {
 	if result.TaskType != nil {
 		out.TaskType = *result.TaskType
 	}
 	if result.TaskConfidence != nil {
 		out.TaskConfidence = *result.TaskConfidence
 	}
+}
+
+func copySemanticFollowupFields(out *SemanticResult, result semanticJudgeResult) {
 	if result.FollowupLabel != nil {
 		out.FollowupLabel = *result.FollowupLabel
 	}
 	if result.FollowupConfidence != nil {
 		out.FollowupConfidence = *result.FollowupConfidence
 	}
+}
+
+func copySemanticSteeringFields(out *SemanticResult, result semanticJudgeResult) {
 	if result.SteeringReason != nil {
 		out.SteeringReason = *result.SteeringReason
 	}
 	if result.SteeringReasonConfidence != nil {
 		out.SteeringReasonConfidence = *result.SteeringReasonConfidence
 	}
+}
+
+func copySemanticPreventionFields(out *SemanticResult, result semanticJudgeResult) {
 	if result.NotPreventable != nil {
 		out.NotPreventable = *result.NotPreventable
 	}
 	if result.PreventionConfidence != nil {
 		out.PreventionConfidence = *result.PreventionConfidence
 	}
+}
+
+func copySemanticClassificationFields(out *SemanticResult, result semanticJudgeResult) {
 	if result.PromptIssue != nil {
 		out.PromptIssue = *result.PromptIssue
 	}
@@ -478,7 +603,6 @@ func semanticResultFromJudge(result semanticJudgeResult) SemanticResult {
 	if result.ValidationConfidence != nil {
 		out.ValidationConfidence = *result.ValidationConfidence
 	}
-	return out
 }
 
 type semanticInvalidBatchError struct{ err error }
@@ -488,27 +612,80 @@ func (e *semanticInvalidBatchError) Unwrap() error { return e.err }
 
 func (e *SemanticEngine) Analyze(inputs []SemanticInput) (SemanticAnalysis, error) {
 	started := time.Now()
-	stats := SemanticStats{TotalRecords: len(inputs), ConfiguredWorkers: e.config.Workers, BatchSize: e.config.BatchSize, Methodology: e.config.MethodologyVersion, PromptVersion: e.config.PromptVersion, SchemaVersion: e.config.SchemaVersion, Model: e.config.Model, Effort: e.config.Effort}
+	stats := e.semanticStats(len(inputs))
 	if err := validateSemanticInputs(inputs); err != nil {
 		return SemanticAnalysis{}, err
 	}
+
 	results := make([]SemanticResult, len(inputs))
-	pending := make([]semanticIndexedInput, 0, len(inputs))
-	for i, input := range inputs {
-		var cached SemanticResult
-		if e.config.Cache != nil && e.config.Cache.Get(semanticCacheKey(input, e.config), &cached) && cached.TurnID == input.TurnID && ValidateSemanticResults([]SemanticInput{input}, []SemanticResult{cached}) == nil {
-			results[i] = cached
-			stats.CacheHits++
-			continue
-		}
-		pending = append(pending, semanticIndexedInput{index: i, input: input})
-	}
+	pending := e.selectSemanticCache(inputs, results, &stats)
 	batches, err := planSemanticBatches(pending, e.config.BatchSize, semanticMaxBatchBytes)
 	if err != nil {
 		return SemanticAnalysis{}, err
 	}
+	emitProgress := e.semanticProgressReporter(len(inputs), started, stats)
+	// Report the cache lookup as the initial progress event, even when every
+	// record was served from cache.
+	emitProgress(0, 0)
+	evaluatedRecords, evaluatedBatches, err := e.executeSemanticBatches(batches, results, emitProgress)
+	if err != nil {
+		return SemanticAnalysis{}, err
+	}
+	stats.EvaluatedRecords = evaluatedRecords
+	stats.EvaluatedBatches = evaluatedBatches
+	stats.CompletedRecords = len(inputs)
+	stats.Elapsed = time.Since(started)
+
+	return SemanticAnalysis{Results: results, Stats: stats}, nil
+}
+
+func (e *SemanticEngine) semanticStats(total int) SemanticStats {
+	return SemanticStats{
+		TotalRecords: total, ConfiguredWorkers: e.config.Workers, BatchSize: e.config.BatchSize,
+		Methodology: e.config.MethodologyVersion, PromptVersion: e.config.PromptVersion,
+		SchemaVersion: e.config.SchemaVersion, Model: e.config.Model, Effort: e.config.Effort,
+	}
+}
+
+func (e *SemanticEngine) selectSemanticCache(
+	inputs []SemanticInput,
+	results []SemanticResult,
+	stats *SemanticStats,
+) []semanticIndexedInput {
+	pending := make([]semanticIndexedInput, 0, len(inputs))
+	for index, input := range inputs {
+		if result, ok := e.cachedSemanticResult(input); ok {
+			results[index] = result
+			stats.CacheHits++
+
+			continue
+		}
+		pending = append(pending, semanticIndexedInput{index: index, input: input})
+	}
+
+	return pending
+}
+
+func (e *SemanticEngine) cachedSemanticResult(input SemanticInput) (SemanticResult, bool) {
+	var cached SemanticResult
+	if e.config.Cache == nil || !e.config.Cache.Get(semanticCacheKey(input, e.config), &cached) || cached.TurnID != input.TurnID {
+		return SemanticResult{}, false
+	}
+	if ValidateSemanticResults([]SemanticInput{input}, []SemanticResult{cached}) != nil {
+		return SemanticResult{}, false
+	}
+
+	return cached, true
+}
+
+func (e *SemanticEngine) semanticProgressReporter(
+	total int,
+	started time.Time,
+	stats SemanticStats,
+) func(int, int) {
 	var progressMu sync.Mutex
-	emitProgress := func(evaluatedRecords, evaluatedBatches int) {
+
+	return func(evaluatedRecords, evaluatedBatches int) {
 		callback := e.config.Progress
 		if callback == nil {
 			callback = e.config.OnProgress
@@ -519,58 +696,70 @@ func (e *SemanticEngine) Analyze(inputs []SemanticInput) (SemanticAnalysis, erro
 		progressMu.Lock()
 		defer progressMu.Unlock()
 		callback(SemanticProgress{
-			TotalRecords: len(inputs), CompletedRecords: stats.CacheHits + evaluatedRecords,
+			TotalRecords: total, CompletedRecords: stats.CacheHits + evaluatedRecords,
 			CacheHits: stats.CacheHits, EvaluatedRecords: evaluatedRecords, EvaluatedBatches: evaluatedBatches,
 			ConfiguredWorkers: stats.ConfiguredWorkers, BatchSize: stats.BatchSize, Elapsed: time.Since(started),
 			Methodology: stats.Methodology, PromptVersion: stats.PromptVersion, SchemaVersion: stats.SchemaVersion,
 			Model: stats.Model, Effort: stats.Effort,
 		})
 	}
-	// Report the cache lookup as the initial progress event, even when every
-	// record was served from cache.
-	emitProgress(0, 0)
+}
 
+type semanticExecutionState struct {
+	mu       sync.Mutex
+	firstErr error
+	cancel   context.CancelFunc
+}
+
+func (state *semanticExecutionState) record(err error) {
+	state.mu.Lock()
+	if state.firstErr == nil {
+		state.firstErr = err
+		state.cancel()
+	}
+	state.mu.Unlock()
+}
+
+func (state *semanticExecutionState) error() error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	return state.firstErr
+}
+
+func (e *SemanticEngine) executeSemanticBatches(
+	batches [][]semanticIndexedInput,
+	results []SemanticResult,
+	emitProgress func(int, int),
+) (int, int, error) {
 	var evaluatedRecords atomic.Int64
 	var evaluatedBatches atomic.Int64
-	var mu sync.Mutex
-	var firstErr error
+	var outputMu sync.Mutex
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	state := &semanticExecutionState{cancel: cancel}
 	jobs := make(chan []semanticIndexedInput)
-	var wg sync.WaitGroup
-	workerCount := e.config.Workers
-	if workerCount > len(pending) && len(pending) > 0 {
-		workerCount = len(pending)
+	var workers sync.WaitGroup
+	workerCount := semanticWorkerCount(e.config.Workers, len(batches))
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go e.runSemanticWorker(ctx, jobs, results, &outputMu, &evaluatedRecords, &evaluatedBatches, emitProgress, state, &workers)
 	}
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				var batch []semanticIndexedInput
-				var ok bool
-				select {
-				case <-ctx.Done():
-					return
-				case batch, ok = <-jobs:
-					if !ok {
-						return
-					}
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				if err := e.processSemanticBatch(batch, results, &mu, &evaluatedRecords, &evaluatedBatches, emitProgress); err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						cancel()
-					}
-					mu.Unlock()
-				}
-			}
-		}()
+	dispatchSemanticBatches(ctx, jobs, batches)
+	workers.Wait()
+
+	return int(evaluatedRecords.Load()), int(evaluatedBatches.Load()), state.error()
+}
+
+func semanticWorkerCount(configured, batches int) int {
+	if configured > batches && batches > 0 {
+		return batches
 	}
+
+	return configured
+}
+
+func dispatchSemanticBatches(ctx context.Context, jobs chan<- []semanticIndexedInput, batches [][]semanticIndexedInput) {
 dispatch:
 	for _, batch := range batches {
 		select {
@@ -580,20 +769,45 @@ dispatch:
 		}
 	}
 	close(jobs)
-	wg.Wait()
-	if firstErr != nil {
-		return SemanticAnalysis{}, firstErr
+}
+
+func (e *SemanticEngine) runSemanticWorker(
+	ctx context.Context,
+	jobs <-chan []semanticIndexedInput,
+	results []SemanticResult,
+	outputMu *sync.Mutex,
+	evaluatedRecords, evaluatedBatches *atomic.Int64,
+	emitProgress func(int, int),
+	state *semanticExecutionState,
+	workers *sync.WaitGroup,
+) {
+	defer workers.Done()
+	for {
+		batch, ok := nextSemanticBatch(ctx, jobs)
+		if !ok {
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err := e.processSemanticBatch(batch, results, outputMu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
+			state.record(err)
+		}
 	}
-	stats.EvaluatedRecords = int(evaluatedRecords.Load())
-	stats.EvaluatedBatches = int(evaluatedBatches.Load())
-	stats.CompletedRecords = len(inputs)
-	stats.Elapsed = time.Since(started)
-	return SemanticAnalysis{Results: results, Stats: stats}, nil
+}
+
+func nextSemanticBatch(ctx context.Context, jobs <-chan []semanticIndexedInput) ([]semanticIndexedInput, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, false
+	case batch, ok := <-jobs:
+		return batch, ok
+	}
 }
 
 func planSemanticBatches(items []semanticIndexedInput, maxRecords, maxBytes int) ([][]semanticIndexedInput, error) {
 	if maxRecords < 1 || maxBytes < 1 {
-		return nil, errors.New("semantic batch limits must be positive")
+		return nil, errSemanticBatchLimits
 	}
 	recordSizes := make([]int, len(items))
 	for i := range items {
@@ -603,10 +817,10 @@ func planSemanticBatches(items []semanticIndexedInput, maxRecords, maxBytes int)
 		}
 		recordSizes[i] = len(record)
 	}
-	baseBytes := len(semanticJudgePrompt) + len(semanticRecordsPrefix) + 2
+	baseBytes := len(semanticJudgePrompt) + len(semanticRecordsPrefix) + semanticJSONArrayBytes
 	batches := make([][]semanticIndexedInput, 0, (len(items)+maxRecords-1)/maxRecords)
-	for start := 0; start < len(items); {
-		end := start
+	for start, end := 0, 0; start < len(items); {
+		end = start
 		batchBytes := baseBytes
 		for end < len(items) && end-start < maxRecords {
 			recordBytes := recordSizes[end]
@@ -620,11 +834,12 @@ func planSemanticBatches(items []semanticIndexedInput, maxRecords, maxBytes int)
 			end++
 		}
 		if end == start {
-			return nil, fmt.Errorf("semantic input turn %q exceeds internal prompt budget after truncation", items[start].input.TurnID)
+			return nil, fmt.Errorf("%w %q exceeds internal prompt budget after truncation", errSemanticInputBudgetExceeded, items[start].input.TurnID)
 		}
 		batches = append(batches, items[start:end])
 		start = end
 	}
+
 	return batches, nil
 }
 
@@ -632,67 +847,141 @@ func validateSemanticInputs(inputs []SemanticInput) error {
 	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		if input.TurnID == "" {
-			return errors.New("semantic input has empty turn id")
+			return errEmptySemanticTurnID
 		}
 		if _, ok := seen[input.TurnID]; ok {
-			return fmt.Errorf("duplicate semantic input turn id %q", input.TurnID)
+			return fmt.Errorf("%w %q", errDuplicateSemanticInputTurnID, input.TurnID)
 		}
 		if input.Followup != nil && strings.TrimSpace(input.Followup.Prompt) == "" {
-			return fmt.Errorf("semantic input turn %q has blank follow-up prompt", input.TurnID)
+			return fmt.Errorf("%w %q has blank follow-up prompt", errBlankSemanticFollowupPrompt, input.TurnID)
 		}
 		seen[input.TurnID] = struct{}{}
 	}
+
 	return nil
 }
 
-func (e *SemanticEngine) processSemanticBatch(batch []semanticIndexedInput, output []SemanticResult, mu *sync.Mutex, evaluatedRecords, evaluatedBatches *atomic.Int64, emitProgress func(int, int)) error {
-	inputs := make([]SemanticInput, len(batch))
-	for i := range batch {
-		inputs[i] = batch[i].input
-	}
+func (e *SemanticEngine) processSemanticBatch(
+	batch []semanticIndexedInput,
+	output []SemanticResult,
+	outputMu *sync.Mutex,
+	evaluatedRecords, evaluatedBatches *atomic.Int64,
+	emitProgress func(int, int),
+) error {
+	inputs := semanticBatchInputs(batch)
 	results, err := e.runSemanticBatch(inputs)
 	if err != nil {
-		if isSplittableSemanticBatchError(err) && len(batch) > 1 {
-			middle := len(batch) / 2
-			if err := e.processSemanticBatch(batch[:middle], output, mu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
-				return fmt.Errorf("semantic split left: %w", err)
-			}
-			if err := e.processSemanticBatch(batch[middle:], output, mu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
-				return fmt.Errorf("semantic split right: %w", err)
-			}
-			return nil
-		}
-		if isSemanticInputTooLargeError(err) {
-			return fmt.Errorf("semantic input turn %q exceeds Judge input limit after truncation: %w", batch[0].input.TurnID, err)
-		}
-		return err
+		return e.handleSemanticBatchFailure(batch, err, output, outputMu, evaluatedRecords, evaluatedBatches, emitProgress)
 	}
 	if err := ValidateSemanticResults(inputs, results); err != nil {
 		return err
 	}
+
+	return e.finalizeSemanticBatch(batch, inputs, results, output, outputMu, evaluatedRecords, evaluatedBatches, emitProgress)
+}
+
+func semanticBatchInputs(batch []semanticIndexedInput) []SemanticInput {
+	inputs := make([]SemanticInput, len(batch))
+	for index := range batch {
+		inputs[index] = batch[index].input
+	}
+
+	return inputs
+}
+
+func (e *SemanticEngine) handleSemanticBatchFailure(
+	batch []semanticIndexedInput,
+	cause error,
+	output []SemanticResult,
+	outputMu *sync.Mutex,
+	evaluatedRecords, evaluatedBatches *atomic.Int64,
+	emitProgress func(int, int),
+) error {
+	if isSplittableSemanticBatchError(cause) && len(batch) > 1 {
+		return e.processSemanticSplit(batch, output, outputMu, evaluatedRecords, evaluatedBatches, emitProgress)
+	}
+	if isSemanticInputTooLargeError(cause) {
+		return fmt.Errorf("semantic input turn %q exceeds Judge input limit after truncation: %w", batch[0].input.TurnID, cause)
+	}
+
+	return cause
+}
+
+func (e *SemanticEngine) processSemanticSplit(
+	batch []semanticIndexedInput,
+	output []SemanticResult,
+	outputMu *sync.Mutex,
+	evaluatedRecords, evaluatedBatches *atomic.Int64,
+	emitProgress func(int, int),
+) error {
+	middle := len(batch) / semanticBatchSplitDivisor
+	if err := e.processSemanticBatch(batch[:middle], output, outputMu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
+		return fmt.Errorf("semantic split left: %w", err)
+	}
+	if err := e.processSemanticBatch(batch[middle:], output, outputMu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
+		return fmt.Errorf("semantic split right: %w", err)
+	}
+
+	return nil
+}
+
+func (e *SemanticEngine) finalizeSemanticBatch(
+	batch []semanticIndexedInput,
+	inputs []SemanticInput,
+	results []SemanticResult,
+	output []SemanticResult,
+	outputMu *sync.Mutex,
+	evaluatedRecords, evaluatedBatches *atomic.Int64,
+	emitProgress func(int, int),
+) error {
+	byID := semanticResultsByID(results)
+	if err := e.persistSemanticResults(inputs, byID); err != nil {
+		return err
+	}
+	storeSemanticBatchResults(batch, byID, output, outputMu)
+	evaluatedRecords.Add(int64(len(batch)))
+	evaluatedBatches.Add(1)
+	emitProgress(int(evaluatedRecords.Load()), int(evaluatedBatches.Load()))
+
+	return nil
+}
+
+func semanticResultsByID(results []SemanticResult) map[string]SemanticResult {
 	byID := make(map[string]SemanticResult, len(results))
 	for _, result := range results {
 		byID[result.TurnID] = result
 	}
-	if e.config.Cache != nil {
-		for _, input := range inputs {
-			if err := e.config.Cache.Set(semanticCacheKey(input, e.config), byID[input.TurnID]); err != nil {
-				return fmt.Errorf("cache semantic result: %w", err)
-			}
-		}
-		if err := e.config.Cache.Save(); err != nil {
-			return fmt.Errorf("save semantic cache: %w", err)
+
+	return byID
+}
+
+func (e *SemanticEngine) persistSemanticResults(inputs []SemanticInput, results map[string]SemanticResult) error {
+	if e.config.Cache == nil {
+		return nil
+	}
+	for _, input := range inputs {
+		if err := e.config.Cache.Set(semanticCacheKey(input, e.config), results[input.TurnID]); err != nil {
+			return fmt.Errorf("cache semantic result: %w", err)
 		}
 	}
-	mu.Lock()
+	if err := e.config.Cache.Save(); err != nil {
+		return fmt.Errorf("save semantic cache: %w", err)
+	}
+
+	return nil
+}
+
+func storeSemanticBatchResults(
+	batch []semanticIndexedInput,
+	byID map[string]SemanticResult,
+	output []SemanticResult,
+	outputMu *sync.Mutex,
+) {
+	outputMu.Lock()
 	for _, item := range batch {
 		output[item.index] = byID[item.input.TurnID]
 	}
-	mu.Unlock()
-	evaluatedRecords.Add(int64(len(batch)))
-	evaluatedBatches.Add(1)
-	emitProgress(int(evaluatedRecords.Load()), int(evaluatedBatches.Load()))
-	return nil
+	outputMu.Unlock()
 }
 
 func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticResult, error) {
@@ -706,55 +995,74 @@ func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticRes
 		if attempt > 0 {
 			time.Sleep(e.config.RetryBackoff(attempt))
 		}
-		var response semanticJudgeResponse
-		if err := e.config.Runner.Run(prompt, semanticSchema(), &response); err != nil {
-			lastErr = err
-			if isSemanticInputTooLargeError(err) {
-				return nil, err
-			}
-			if !isTransientSemanticError(err) || attempt == e.config.MaxRetries {
-				return nil, err
-			}
-			continue
+		results, err := e.runSemanticAttempt(prompt, inputs)
+		if err == nil {
+			return results, nil
 		}
-		results := make([]SemanticResult, len(response.Results))
-		expected := make(map[string]SemanticInput, len(inputs))
-		for _, input := range inputs {
-			expected[input.TurnID] = input
-		}
-		var validationErr error
-		for i, result := range response.Results {
-			input, ok := expected[result.TurnID]
-			if !ok {
-				validationErr = &semanticInvalidBatchError{err: fmt.Errorf("judge returned unexpected turn id %q", result.TurnID)}
-				break
-			}
-			if err := validateSemanticJudgePresence(input, result); err != nil {
-				validationErr = &semanticInvalidBatchError{err: err}
-				break
-			}
-			results[i] = semanticResultFromJudge(result)
-		}
-		if validationErr == nil {
-			if err := ValidateSemanticResults(inputs, results); err != nil {
-				validationErr = &semanticInvalidBatchError{err: err}
-			}
-		}
-		if validationErr != nil {
+		if isSemanticInvalidBatch(err) {
 			if len(inputs) != 1 {
-				return nil, validationErr
+				return nil, err
 			}
 			if firstValidationErr == nil {
-				firstValidationErr = validationErr
+				firstValidationErr = err
 			}
 			if attempt == e.config.MaxRetries {
 				return nil, firstValidationErr
 			}
+
 			continue
 		}
-		return results, nil
+		lastErr = err
+		if isSemanticInputTooLargeError(err) || !isTransientSemanticError(err) || attempt == e.config.MaxRetries {
+			return nil, err
+		}
 	}
+
 	return nil, lastErr
+}
+
+func (e *SemanticEngine) runSemanticAttempt(prompt string, inputs []SemanticInput) ([]SemanticResult, error) {
+	var response semanticJudgeResponse
+	if err := e.config.Runner.Run(prompt, semanticSchema(), &response); err != nil {
+		return nil, fmt.Errorf("run semantic Judge attempt: %w", err)
+	}
+	results, err := decodeSemanticResults(inputs, response.Results)
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+func decodeSemanticResults(inputs []SemanticInput, decoded []semanticJudgeResult) ([]SemanticResult, error) {
+	results := make([]SemanticResult, len(decoded))
+	expected := make(map[string]SemanticInput, len(inputs))
+	for _, input := range inputs {
+		expected[input.TurnID] = input
+	}
+	for index, result := range decoded {
+		input, ok := expected[result.TurnID]
+		if !ok {
+			cause := fmt.Errorf("%w %q", errUnexpectedResultID, result.TurnID)
+
+			return nil, &semanticInvalidBatchError{err: cause}
+		}
+		if err := validateSemanticJudgePresence(input, result); err != nil {
+			return nil, &semanticInvalidBatchError{err: err}
+		}
+		results[index] = semanticResultFromJudge(result)
+	}
+	if err := ValidateSemanticResults(inputs, results); err != nil {
+		return nil, &semanticInvalidBatchError{err: err}
+	}
+
+	return results, nil
+}
+
+func isSemanticInvalidBatch(err error) bool {
+	var invalid *semanticInvalidBatchError
+
+	return errors.As(err, &invalid)
 }
 
 func buildSemanticPrompt(inputs []SemanticInput) (string, error) {
@@ -773,6 +1081,7 @@ func buildSemanticPrompt(inputs []SemanticInput) (string, error) {
 		prompt.Write(record)
 	}
 	prompt.WriteByte(']')
+
 	return prompt.String(), nil
 }
 
@@ -789,6 +1098,7 @@ func marshalSemanticRecord(input SemanticInput) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal semantic record %q: %w", input.TurnID, err)
 	}
+
 	return data, nil
 }
 
@@ -797,7 +1107,7 @@ func truncateSemanticText(text string) string {
 		return text
 	}
 	contentBytes := semanticMaxTextBytes - len(semanticTruncationMarker)
-	headBytes := contentBytes / 2
+	headBytes := contentBytes / semanticTruncationDivisor
 	tailBytes := contentBytes - headBytes
 	headEnd := headBytes
 	for headEnd > 0 && !utf8.RuneStart(text[headEnd]) {
@@ -807,16 +1117,19 @@ func truncateSemanticText(text string) string {
 	for tailStart < len(text) && !utf8.RuneStart(text[tailStart]) {
 		tailStart++
 	}
+
 	return text[:headEnd] + semanticTruncationMarker + text[tailStart:]
 }
 
 func isSplittableSemanticBatchError(err error) bool {
 	var invalid *semanticInvalidBatchError
+
 	return errors.As(err, &invalid) || isSemanticInputTooLargeError(err)
 }
 
 func isSemanticInputTooLargeError(err error) bool {
 	text := strings.ToLower(err.Error())
+
 	return strings.Contains(text, "input_too_large") ||
 		strings.Contains(text, "input exceeds the maximum length")
 }
@@ -828,6 +1141,7 @@ func isTransientSemanticError(err error) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -843,6 +1157,7 @@ func semanticCacheKey(input SemanticInput, config SemanticConfig) string {
 			hash.Write([]byte{0})
 		}
 	}
+
 	return "semantic:" + hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -859,10 +1174,10 @@ func validateSemanticResults(inputs []SemanticInput, results []SemanticResult) e
 	for _, result := range results {
 		input, ok := expected[result.TurnID]
 		if !ok {
-			return fmt.Errorf("judge returned unexpected turn id %q", result.TurnID)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.TurnID)
 		}
 		if _, duplicate := seen[result.TurnID]; duplicate {
-			return fmt.Errorf("judge returned duplicate turn id %q", result.TurnID)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.TurnID)
 		}
 		seen[result.TurnID] = struct{}{}
 		if err := validateSemanticRecord(input, result); err != nil {
@@ -870,8 +1185,9 @@ func validateSemanticResults(inputs []SemanticInput, results []SemanticResult) e
 		}
 	}
 	if len(seen) != len(expected) {
-		return fmt.Errorf("judge returned %d results, expected %d", len(seen), len(expected))
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
+
 	return nil
 }
 
@@ -880,51 +1196,93 @@ func ValidateSemanticResults(inputs []SemanticInput, results []SemanticResult) e
 }
 
 func validateSemanticRecord(input SemanticInput, result SemanticResult) error {
+	if err := validateSemanticTaskRecord(input, result); err != nil {
+		return err
+	}
+
+	return validateSemanticFollowupRecord(input, result)
+}
+
+func validateSemanticTaskRecord(input SemanticInput, result SemanticResult) error {
 	if input.Prompt == "" {
 		if result.TaskType != "" || result.TaskConfidence != 0 {
-			return fmt.Errorf("turn %q has task classification despite unavailable prompt", input.TurnID)
+			return semanticTurnErrorMessage(errSemanticTaskWhenPromptMissing, input.TurnID, "has task classification despite unavailable prompt")
 		}
-	} else if !isTaskType(result.TaskType) {
-		return fmt.Errorf("judge returned unsupported task type %q", result.TaskType)
+
+		return nil
 	}
+	if !isTaskType(result.TaskType) {
+		return fmt.Errorf("%w %q", errUnsupportedTaskType, result.TaskType)
+	}
+
+	return nil
+}
+
+func validateSemanticFollowupRecord(input SemanticInput, result SemanticResult) error {
 	if input.Followup == nil {
 		if hasFollowupFields(result) {
-			return fmt.Errorf("turn %q has follow-up fields without a follow-up", input.TurnID)
+			return semanticTurnErrorMessage(errSemanticFollowupFieldsWithoutFollowup, input.TurnID, "has follow-up fields without a follow-up")
 		}
+
 		return nil
 	}
 	if !isSteeringLabel(result.FollowupLabel) {
-		return fmt.Errorf("judge returned unsupported steering label %q", result.FollowupLabel)
+		return fmt.Errorf("%w %q", errUnsupportedSteeringLabel, result.FollowupLabel)
 	}
 	if result.FollowupLabel != "steering" {
 		if hasSteeringFields(result) {
-			return fmt.Errorf("turn %q has steering-only fields for non-steering follow-up", input.TurnID)
+			return semanticTurnErrorMessage(errSemanticSteeringFieldsForOtherLabel, input.TurnID, "has steering-only fields for non-steering follow-up")
 		}
+
 		return nil
 	}
+
+	return validateSemanticSteeringRecord(input, result)
+}
+
+func validateSemanticSteeringRecord(input SemanticInput, result SemanticResult) error {
 	if !isSteeringReason(result.SteeringReason) {
-		return fmt.Errorf("judge returned unsupported steering reason %q", result.SteeringReason)
+		return fmt.Errorf("%w %q", errUnsupportedSteeringReason, result.SteeringReason)
 	}
-	if len(result.PreventionMechanisms) == 0 && !result.NotPreventable {
-		return fmt.Errorf("turn %q has no prevention mechanism but is not marked not preventable", input.TurnID)
+	if err := validateSemanticPreventionRecord(input, result); err != nil {
+		return err
 	}
-	if result.NotPreventable && len(result.PreventionMechanisms) != 0 {
-		return fmt.Errorf("turn %q is marked not preventable but has applicable mechanisms", input.TurnID)
+
+	return validateSemanticRecordConditionals(result)
+}
+
+func validateSemanticPreventionRecord(input SemanticInput, result SemanticResult) error {
+	mechanismCount := len(result.PreventionMechanisms)
+	if mechanismCount == 0 && !result.NotPreventable {
+		return semanticTurnErrorMessage(errSemanticEmptyMechanismMustBeNotPreventable, input.TurnID, "has no prevention mechanism but is not marked not preventable")
 	}
-	if len(result.PreventionMechanisms) == 0 && result.PreventionConfidence != 0 {
-		return fmt.Errorf("turn %q has prevention confidence without an applicable prevention mechanism", input.TurnID)
+	if result.NotPreventable && mechanismCount != 0 {
+		return fmt.Errorf("%w %q is marked not preventable but has applicable mechanisms", errSemanticNotPreventableHasMechanisms, input.TurnID)
 	}
+	if mechanismCount == 0 && result.PreventionConfidence != 0 {
+		return semanticTurnErrorMessage(errSemanticPreventionConfidenceWithoutMechanism, input.TurnID, "has prevention confidence without an applicable prevention mechanism")
+	}
+
+	return validateSemanticMechanismValues(input, result)
+}
+
+func validateSemanticMechanismValues(input SemanticInput, result SemanticResult) error {
 	allowed := map[string]struct{}{"agents_md": {}, "skill": {}, "task_prompt": {}, "validation": {}}
 	used := make(map[string]struct{}, len(result.PreventionMechanisms))
 	for _, mechanism := range result.PreventionMechanisms {
 		if _, ok := allowed[mechanism]; !ok {
-			return fmt.Errorf("judge returned unsupported prevention mechanism %q", mechanism)
+			return fmt.Errorf("%w %q", errUnsupportedPrevention, mechanism)
 		}
-		if _, ok := used[mechanism]; ok {
-			return fmt.Errorf("turn %q has duplicate prevention mechanism %q", input.TurnID, mechanism)
+		if _, duplicate := used[mechanism]; duplicate {
+			return fmt.Errorf("%w %q has duplicate prevention mechanism %q", errSemanticDuplicateMechanism, input.TurnID, mechanism)
 		}
 		used[mechanism] = struct{}{}
 	}
+
+	return nil
+}
+
+func validateSemanticRecordConditionals(result SemanticResult) error {
 	if err := validateConditional(result, "task_prompt", result.PromptIssue, result.PromptIssueConfidence, isPromptQualityIssue); err != nil {
 		return err
 	}
@@ -937,17 +1295,19 @@ func validateSemanticRecord(input SemanticInput, result SemanticResult) error {
 	if err := validateConditional(result, "validation", result.ValidationType, result.ValidationConfidence, isValidationType); err != nil {
 		return err
 	}
+
 	return nil
 }
 
 func validateConditional(result SemanticResult, mechanism, value string, confidence float64, valid func(string) bool) error {
 	present := containsString(result.PreventionMechanisms, mechanism)
 	if present && !valid(value) {
-		return fmt.Errorf("prevention mechanism %q requires a valid follow-on classification, got %q", mechanism, value)
+		return fmt.Errorf("%w %q requires a valid follow-on classification, got %q", errSemanticConditionalRequiresValue, mechanism, value)
 	}
 	if !present && (value != "" || confidence != 0) {
-		return fmt.Errorf("follow-on classification %q is present without prevention mechanism %q", value, mechanism)
+		return fmt.Errorf("%w %q is present without prevention mechanism %q", errSemanticConditionalWithoutMechanism, value, mechanism)
 	}
+
 	return nil
 }
 
@@ -1070,6 +1430,7 @@ func semanticSchema() map[string]any {
 		"required":             []string{"turn_id", "task_type", "task_confidence", "followup_label", "followup_confidence", "steering_reason", "steering_reason_confidence", "prevention_mechanisms", "not_preventable", "prevention_confidence", "prompt_issue", "prompt_issue_confidence", "agents_rule", "agents_rule_confidence", "skill_candidate", "skill_confidence", "validation_type", "validation_confidence"},
 		"additionalProperties": false,
 	}
+
 	return map[string]any{
 		"type":                 "object",
 		"properties":           map[string]any{"results": map[string]any{"type": "array", "items": record}},

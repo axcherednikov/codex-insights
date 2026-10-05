@@ -2,8 +2,10 @@ package cache
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -49,5 +51,42 @@ func TestSaveUsesAtomicValidJSONAndSupportsConcurrentWriters(t *testing.T) {
 		if filepath.Ext(entry.Name()) == ".tmp" {
 			t.Fatalf("temporary file left behind: %s", entry.Name())
 		}
+	}
+}
+
+func TestNewWrapsVersionMismatchIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cache.json")
+	if err := os.WriteFile(path, []byte(`{"version":99,"entries":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := New(path)
+	if !errors.Is(err, errUnsupportedCacheVersion) || !strings.Contains(err.Error(), "unsupported cache version 99") {
+		t.Fatalf("New() error = %v, want version context and typed identity", err)
+	}
+}
+
+func TestSaveCreatesPrivateDirectoryAndFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "cache.json")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	checkCacheMode(t, filepath.Dir(path), 0o700)
+	checkCacheMode(t, path, 0o600)
+}
+
+func checkCacheMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode for %q = %04o, want %04o", path, got, want)
 	}
 }

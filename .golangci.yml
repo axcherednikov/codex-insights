@@ -1,0 +1,162 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - copyloopvar
+    - cyclop
+    - err113
+    - errchkjson
+    - errname
+    - exptostd
+    - forcetypeassert
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - godox
+    - gosec
+    - iface
+    - mirror
+    - mnd
+    - nlreturn
+    - noctx
+    - nonamedreturns
+    - nosprintfhostport
+    - perfsprint
+    - spancheck
+    - sqlclosecheck
+    - wrapcheck
+    - zerologlint
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - tagliatelle
+  settings:
+    copyloopvar:
+      check-alias: true
+    cyclop:
+      max-complexity: 13
+      package-average: 7.0
+    errchkjson:
+      check-error-free-encoding: true
+      report-no-exported: true
+    errcheck:
+      exclude-functions:
+        - encoding/json.Marshal
+        - encoding/json.MarshalIndent
+    funlen:
+      lines: -1
+      statements: -1
+      ignore-comments: true
+    godox:
+      keywords:
+        - TODO
+        - BUG
+        - FIXME
+    iface:
+      enable:
+        - identical
+        - unused
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - operation
+        - return
+        - assign
+      ignored-numbers: [ ]
+      ignored-files: [ ]
+      ignored-functions: [ ]
+    nlreturn:
+      block-size: 1
+    nonamedreturns:
+      report-error-in-defer: false
+    perfsprint:
+      integer-format: true
+      int-conversion: true
+      error-format: true
+      err-error: true
+      errorf: true
+      string-format: true
+      sprintf1: true
+      strconcat: true
+      bool-format: true
+      hex-format: true
+    spancheck:
+      checks:
+        - end
+        - record-error
+        - set-status
+      ignore-check-signatures: [ ]
+      extra-start-span-signatures: [ ]
+    wrapcheck:
+      extra-ignore-sigs: [ ]
+      ignore-sigs: [ ".Errorf(", "errors.New(", "errors.Unwrap(", "errors.Join(", ".Wrap(", ".Wrapf(", ".WithMessage(", ".WithMessagef(", ".WithStack(" ]
+      ignore-sig-regexps: [ ]
+      ignore-package-globs: [ ]
+      ignore-interface-regexps: [ ]
+    tagliatelle:
+      case:
+        rules:
+          json: snake
+          yaml: snake
+          env: upperSnake
+          envconfig: upperSnake
+        extended-rules: {}
+        use-field-name: false
+        ignored-fields: []
+        overrides: []
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - cyclop
+          - err113
+          - gosimple
+          - funlen
+          - gosec
+          - nonamedreturns
+
+formatters:
+  enable:
+    - gci
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+      no-inline-comments: false
+      no-prefix-comments: false
+      custom-order: false
+      no-lex-order: false
+    golines:
+      max-len: 500
+      tab-len: 4
+      shorten-comments: false
+      reformat-tags: false
+      chain-split-dots: true
+  exclusions:
+    generated: lax
+    paths: [ ]
+
+issues:
+  max-issues-per-linter: 5000
+  max-same-issues: 5000
+  uniq-by-line: false
+  new: false
+  new-from-merge-base: ""
+  new-from-rev: ""
+  new-from-patch: ""
+  whole-files: false
+  fix: false
+
+run:
+  tests: false

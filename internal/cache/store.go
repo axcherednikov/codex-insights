@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/axcherednikov/codex-insights/internal/fileio"
 )
 
 const version = 1
@@ -42,7 +44,7 @@ func New(path string) (*Store, error) {
 		entries: make(map[string]json.RawMessage),
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := fileio.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return store, nil
 	}
@@ -58,10 +60,7 @@ func New(path string) (*Store, error) {
 	}
 
 	if disk.Version != version {
-		return nil, fmt.Errorf(
-			"unsupported cache version %d",
-			disk.Version,
-		)
+		return nil, fmt.Errorf("unsupported cache version %d: %w", disk.Version, errUnsupportedCacheVersion)
 	}
 
 	if disk.Entries != nil {
@@ -118,37 +117,8 @@ func (s *Store) Save() error {
 		return fmt.Errorf("encode cache: %w", err)
 	}
 
-	if err := os.MkdirAll(
-		filepath.Dir(s.path),
-		0o755,
-	); err != nil {
-		return fmt.Errorf("create cache directory: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".analysis-cache-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create cache temporary file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("set cache temporary file permissions: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write cache: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("sync cache: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close cache temporary file: %w", err)
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		return fmt.Errorf("replace cache: %w", err)
+	if err := fileio.WriteAtomic(s.path, ".analysis-cache-", data); err != nil {
+		return fmt.Errorf("persist cache: %w", err)
 	}
 
 	return nil

@@ -2,6 +2,8 @@ package analyze
 
 import "fmt"
 
+const batchSplitDivisor = 2
+
 // analyzeBatchWithSplit keeps normal Judge calls batched, but retries an
 // invalid batch as smaller independently validated subsets. A failing
 // singleton is returned to the caller instead of being silently skipped.
@@ -17,7 +19,7 @@ func analyzeBatchWithSplit[Input, Output any](
 		return nil, err
 	}
 
-	middle := len(items) / 2
+	middle := len(items) / batchSplitDivisor
 	left, leftErr := analyzeBatchWithSplit(items[:middle], run)
 	if leftErr != nil {
 		return nil, fmt.Errorf("analyze split batch left: %w", leftErr)

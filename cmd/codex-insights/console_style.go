@@ -16,6 +16,7 @@ func ansiText(enabled bool, style, text string) string {
 	if !enabled || text == "" {
 		return text
 	}
+
 	return style + text + ansiReset
 }
 

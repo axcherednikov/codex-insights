@@ -112,3 +112,50 @@ func TestRussianInsightTextDoesNotLeakClassifierKeys(t *testing.T) {
 		t.Fatalf("Russian insight leaked internal key: %q", got)
 	}
 }
+
+func TestInsightTextPreservesBilingualTemplatesAndChecksArity(t *testing.T) {
+	tests := []struct {
+		name     string
+		language string
+		kind     string
+		values   []any
+		want     string
+	}{
+		{"english summary", "en", "summary", []any{3, 25.5}, "3 completed prior tasks had observable follow-up behavior labels; steering: 25.5%."},
+		{"russian summary", "ru", "summary", []any{3, 25.5}, "3 завершённых предыдущих задач с последующей поведенческой оценкой; корректировки: 25.5%."},
+		{"english strength positional", "en", "strength", []any{12, 4.5, "research"}, "research has the lowest steering rate among meaningful cohorts: 4.5% (12 samples)."},
+		{"russian weakness positional", "ru", "weakness", []any{12, 94.5, "research"}, "Тип задач «research» имеет наибольшую долю корректировок среди значимых когорт: 94.5% (12 наблюдений)."},
+		{"english model positional", "en", "model_routing", []any{"model-a", "low", "feature", "high", 10.0, 20.0}, "For feature, model model-a's low cohort shows 10.0% steering versus 20.0% for high with lower average cost; test this as an experiment, not a causal conclusion."},
+		{"russian model positional", "ru", "model_routing", []any{"model-a", "low", "feature", "high", 10.0, 20.0}, "Для типа «feature» у модели model-a когорта low показывает 10.0% корректировок против 20.0% у high при меньшей средней стоимости; проверить это как эксперимент, а не причинный вывод."},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tr, err := i18n.New(test.language)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := insightText(tr, test.kind, test.values...); got != test.want {
+				t.Fatalf("insightText() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	for _, test := range []struct {
+		language string
+		kind     string
+		values   []any
+		want     string
+	}{
+		{"en", "summary", nil, "Insufficient data."},
+		{"en", "summary", []any{1}, "Insufficient data."},
+		{"ru", "summary", []any{1}, "Недостаточно данных."},
+		{"ru", "unknown", nil, "Недостаточно данных."},
+	} {
+		tr, err := i18n.New(test.language)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := insightText(tr, test.kind, test.values...); got != test.want {
+			t.Errorf("insightText(%q, %q) = %q, want %q", test.language, test.kind, got, test.want)
+		}
+	}
+}

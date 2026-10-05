@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Propagate local report output and resource failures, and prevent Judge calls
+  when the required privacy disclosure cannot be written.
 - Default reports to English while retaining explicit `--lang auto` locale
   detection and `--lang ru` Russian output.
 - Bound semantic Judge requests by serialized size, truncate exceptionally long

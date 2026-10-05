@@ -2,6 +2,8 @@ package sessions
 
 import "strings"
 
+const minimumInteractionsForFollowup = 2
+
 type Followup struct {
 	PreviousTurnID string
 	TurnID         string
@@ -10,7 +12,7 @@ type Followup struct {
 }
 
 func BuildFollowups(interactions []Interaction) []Followup {
-	if len(interactions) < 2 {
+	if len(interactions) < minimumInteractionsForFollowup {
 		return nil
 	}
 

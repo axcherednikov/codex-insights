@@ -3,8 +3,13 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
-	"os"
+	"fmt"
+	"io"
+
+	"github.com/axcherednikov/codex-insights/internal/fileio"
 )
+
+const metaMaxLineSize = 10 * 1024 * 1024
 
 type Event struct {
 	Timestamp string          `json:"timestamp"`
@@ -21,33 +26,50 @@ type SessionMeta struct {
 }
 
 func ReadMeta(path string) (SessionMeta, error) {
-	f, err := os.Open(path)
+	var meta SessionMeta
+	err := fileio.Read(path, func(reader io.Reader) error {
+		parsed, parseErr := parseMeta(reader)
+		meta = parsed
+
+		return parseErr
+	})
 	if err != nil {
-		return SessionMeta{}, err
+		return SessionMeta{}, fmt.Errorf("read session metadata from %q: %w", path, err)
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024)
+	return meta, nil
+}
 
+func parseMeta(reader io.Reader) (SessionMeta, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, scannerInitialCapacity), metaMaxLineSize)
 	for scanner.Scan() {
-		var event Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-
-		if event.Type != "session_meta" {
-			continue
-		}
-
-		var meta SessionMeta
-		if err := json.Unmarshal(event.Payload, &meta); err != nil {
+		meta, found, err := parseMetaLine(scanner.Bytes())
+		if err != nil {
 			return SessionMeta{}, err
 		}
-		meta.StartedAt = event.Timestamp
-
-		return meta, nil
+		if found {
+			return meta, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return SessionMeta{}, fmt.Errorf("scan session metadata records: %w", err)
 	}
 
-	return SessionMeta{}, scanner.Err()
+	return SessionMeta{}, nil
+}
+
+func parseMetaLine(line []byte) (SessionMeta, bool, error) {
+	var event Event
+	if json.Unmarshal(line, &event) != nil || event.Type != "session_meta" {
+		return SessionMeta{}, false, nil
+	}
+
+	var meta SessionMeta
+	if err := json.Unmarshal(event.Payload, &meta); err != nil {
+		return SessionMeta{}, false, fmt.Errorf("decode session metadata payload: %w", err)
+	}
+	meta.StartedAt = event.Timestamp
+
+	return meta, true, nil
 }
