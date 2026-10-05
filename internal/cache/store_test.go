@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -76,15 +77,21 @@ func TestSaveCreatesPrivateDirectoryAndFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checkCacheMode(t, filepath.Dir(path), 0o700)
-	checkCacheMode(t, path, 0o600)
+	checkCacheMode(t, filepath.Dir(path), 0o700, true)
+	checkCacheMode(t, path, 0o600, false)
 }
 
-func checkCacheMode(t *testing.T, path string, want os.FileMode) {
+func checkCacheMode(t *testing.T, path string, want os.FileMode, wantDirectory bool) {
 	t.Helper()
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if info.IsDir() != wantDirectory {
+		t.Fatalf("path %q directory = %v, want %v", path, info.IsDir(), wantDirectory)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("mode for %q = %04o, want %04o", path, got, want)
