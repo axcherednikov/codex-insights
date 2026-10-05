@@ -1,6 +1,9 @@
 package golden
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +14,33 @@ import (
 
 	"github.com/axcherednikov/codex-insights/internal/analyze"
 )
+
+func TestValidationCausesAndFirstErrorPrecedence(t *testing.T) {
+	fixture := Fixture{FormatVersion: "unknown"}
+	if err := fixture.ValidateForEvaluation(); !errors.Is(err, errUnsupportedFormatVersion) {
+		t.Fatalf("format error = %v, want unsupported-version cause", err)
+	}
+
+	fixture = approvedFixtureForTest()
+	fixture.Cases = []Case{{ID: "bad-id"}}
+	if err := fixture.ValidateForEvaluation(); !errors.Is(err, errInvalidCaseID) {
+		t.Fatalf("case error = %v, want invalid-ID cause before missing-input cause", err)
+	}
+
+	fixture.Cases = []Case{{ID: "case-000001", Prompt: "prompt", FollowupPrompt: "followup", Expected: &Expected{TaskType: "invalid", FollowupLabel: "invalid"}}}
+	if err := fixture.ValidateForEvaluation(); !errors.Is(err, errInvalidTaskType) {
+		t.Fatalf("expected validation error = %v, want task taxonomy before follow-up taxonomy", err)
+	}
+}
+
+func approvedFixtureForTest() Fixture {
+	return Fixture{
+		FormatVersion: FormatVersion,
+		Methodology:   Methodology{MethodologyVersion: "m", PromptVersion: "p", SchemaVersion: "s"},
+		Provenance:    Provenance{Status: ApprovalApproved, ApprovedBy: "reviewer", ApprovedAt: "2026-01-01T00:00:00Z", Source: "review"},
+		Cases:         []Case{{ID: "case-000001", Prompt: "prompt", Expected: &Expected{TaskType: "feature"}}},
+	}
+}
 
 func TestRedactAndCandidateAnonymization(t *testing.T) {
 	inputs := []ExportInput{{ID: "local-turn-secret", Prompt: "email a@example.com token=abc123 /Users/alice/project\n```go\nsecret()\n```", FollowupPrompt: strings.Repeat("x", MaxTextLength+100)}}
@@ -43,6 +73,38 @@ func TestWriteUsesRestrictivePermissions(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("permissions = %o", info.Mode().Perm())
+	}
+	directoryInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("directory permissions = %o", directoryInfo.Mode().Perm())
+	}
+}
+
+func TestWritePreservesCanonicalJSONBytes(t *testing.T) {
+	fixture := Fixture{
+		FormatVersion: FormatVersion,
+		Methodology:   Methodology{MethodologyVersion: "m", PromptVersion: "p", SchemaVersion: "s"},
+		Provenance:    Provenance{Status: ApprovalCandidate},
+		Cases:         []Case{{ID: "case-000001", Prompt: "x"}},
+	}
+	want, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append(want, '\n')
+	path := filepath.Join(t.TempDir(), "fixture.json")
+	if err := Write(path, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("written bytes differ from canonical JSON plus newline:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -175,6 +237,9 @@ func TestEvaluateMetricsJoinsResultsByCaseID(t *testing.T) {
 	results[1].TurnID = "case-missing"
 	if _, err := EvaluateMetrics(f, results); err == nil {
 		t.Fatal("unexpected/missing result IDs accepted")
+	}
+	if _, err := EvaluateMetrics(f, nil); !errors.Is(err, errMetricsResultCount) {
+		t.Fatalf("result count error = %v, want typed result-count cause", err)
 	}
 }
 

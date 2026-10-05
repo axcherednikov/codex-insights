@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -157,8 +159,93 @@ func TestSemanticEngineReturnsSemanticValidationErrorAfterInvalidSingletonRetrie
 	if err == nil || !strings.Contains(err.Error(), "requires task type and confidence") {
 		t.Fatalf("Analyze error = %v, want semantic validation error", err)
 	}
+	if !errors.Is(err, errSemanticTaskAndConfidenceRequired) {
+		t.Fatalf("Analyze error = %v, want typed task classification cause", err)
+	}
+	var invalid *semanticInvalidBatchError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("Analyze error %T does not retain semanticInvalidBatchError", err)
+	}
 	if runner.calls != 3 {
 		t.Fatalf("runner calls = %d, want 3", runner.calls)
+	}
+}
+
+func TestSemanticValidationCausesAndFirstErrorPrecedence(t *testing.T) {
+	invalidTask := "unsupported"
+	unsupportedFollowup := "unsupported"
+	input := SemanticInput{TurnID: "turn-1", Prompt: "task", Followup: &SemanticFollowup{TurnID: "turn-2", Prompt: "next"}}
+
+	presenceCases := []struct {
+		name   string
+		input  SemanticInput
+		result semanticJudgeResult
+		want   error
+	}{
+		{
+			name:   "task presence precedes follow-up presence",
+			input:  SemanticInput{TurnID: "turn-1"},
+			result: semanticJudgeResult{TurnID: "turn-1", TaskType: &invalidTask},
+			want:   errSemanticTaskWhenPromptMissing,
+		},
+		{
+			name:   "required follow-up classification precedes not-preventable",
+			input:  input,
+			result: semanticJudgeResult{TurnID: "turn-1", TaskType: &invalidTask},
+			want:   errSemanticTaskAndConfidenceRequired,
+		},
+	}
+	validTask := "feature"
+	taskConfidence := 0.8
+	presenceCases[1].result.TaskType = &validTask
+	presenceCases[1].result.TaskConfidence = &taskConfidence
+	presenceCases[1].want = errSemanticFollowupAndConfidenceRequired
+	for _, test := range presenceCases {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateSemanticJudgePresence(test.input, test.result)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("presence error = %v, want identity %v", err, test.want)
+			}
+		})
+	}
+
+	valid := SemanticResult{TurnID: "turn-1", TaskType: "feature", TaskConfidence: 0.8, FollowupLabel: "steering"}
+	recordCases := []struct {
+		name   string
+		result SemanticResult
+		want   error
+	}{
+		{
+			name:   "task taxonomy precedes follow-up taxonomy",
+			result: SemanticResult{TurnID: "turn-1", TaskType: invalidTask, FollowupLabel: unsupportedFollowup},
+			want:   errUnsupportedTaskType,
+		},
+		{
+			name:   "steering reason precedes prevention requirements",
+			result: valid,
+			want:   errUnsupportedSteeringReason,
+		},
+	}
+	for _, test := range recordCases {
+		t.Run(test.name, func(t *testing.T) {
+			err := ValidateSemanticResults([]SemanticInput{input}, []SemanticResult{test.result})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("record error = %v, want identity %v", err, test.want)
+			}
+		})
+	}
+
+	missing := validateSemanticInputs([]SemanticInput{{TurnID: "same"}, {TurnID: "same"}})
+	if !errors.Is(missing, errDuplicateSemanticInputTurnID) {
+		t.Fatalf("duplicate input error = %v, want typed duplicate cause", missing)
+	}
+	unexpected := ValidateSemanticResults([]SemanticInput{input}, []SemanticResult{{TurnID: "unexpected"}})
+	if !errors.Is(unexpected, errUnexpectedResultID) {
+		t.Fatalf("unexpected result error = %v, want typed unexpected-ID cause", unexpected)
+	}
+	missingResult := ValidateSemanticResults([]SemanticInput{input}, nil)
+	if !errors.Is(missingResult, errJudgeResultCount) {
+		t.Fatalf("missing result error = %v, want typed result-count cause", missingResult)
 	}
 }
 
@@ -519,6 +606,30 @@ func TestSemanticEngineUsesBoundedConcurrentWorkers(t *testing.T) {
 	}
 	if runner.maxActive > 2 {
 		t.Fatalf("worker cap exceeded: max active = %d", runner.maxActive)
+	}
+}
+
+func TestSemanticWorkerDoesNotAdmitQueuedBatchAfterCancellation(t *testing.T) {
+	runner := &semanticFakeRunner{}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 0})
+	for attempt := 0; attempt < 64; attempt++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		jobs := make(chan []semanticIndexedInput, 1)
+		jobs <- []semanticIndexedInput{{index: 0, input: SemanticInput{TurnID: "queued", Prompt: "ready"}}}
+		cancel()
+		var outputMu sync.Mutex
+		var evaluatedRecords atomic.Int64
+		var evaluatedBatches atomic.Int64
+		var workers sync.WaitGroup
+		workers.Add(1)
+		engine.runSemanticWorker(ctx, jobs, make([]SemanticResult, 1), &outputMu, &evaluatedRecords, &evaluatedBatches, func(int, int) {}, &semanticExecutionState{cancel: cancel}, &workers)
+		workers.Wait()
+		cancel()
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.calls != 0 {
+		t.Fatalf("runner calls after canceled queued work = %d, want 0", runner.calls)
 	}
 }
 

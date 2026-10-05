@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,11 +18,21 @@ import (
 type disclosureCheckingRunner struct {
 	output *bytes.Buffer
 	seen   bool
+	calls  int
 }
 
 func (r *disclosureCheckingRunner) Run(string, any, any) error {
+	r.calls++
 	r.seen = strings.Contains(r.output.String(), "Bounded excerpts of selected task prompts")
 	return errors.New("permission denied")
+}
+
+type failingProgressWriter struct {
+	err error
+}
+
+func (writer failingProgressWriter) Write([]byte) (int, error) {
+	return 0, writer.err
 }
 
 func TestValidateSemanticConcurrency(t *testing.T) {
@@ -78,7 +89,9 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 	var warm bytes.Buffer
 	warmRenderer := newSemanticProgressRenderer(tr, &warm, false)
 	warmRenderer.Update(analyze.SemanticProgress{TotalRecords: 4, CompletedRecords: 4, CacheHits: 4})
-	warmRenderer.Finish()
+	if err := warmRenderer.Finish(); err != nil {
+		t.Fatal(err)
+	}
 	if warm.Len() != 0 {
 		t.Fatalf("warm progress was not suppressed: %q", warm.String())
 	}
@@ -89,7 +102,9 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 	for _, completed := range []int{1, 10, 25, 50, 75, 100} {
 		coldRenderer.Update(analyze.SemanticProgress{TotalRecords: 100, CompletedRecords: completed, CacheHits: 2, ConfiguredWorkers: 6, Elapsed: time.Second})
 	}
-	coldRenderer.Finish()
+	if err := coldRenderer.Finish(); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(cold.String(), tr.T("semantic_privacy")) || !strings.Contains(cold.String(), "100% (100/100)") {
 		t.Fatalf("cold disclosure/progress missing: %q", cold.String())
 	}
@@ -133,7 +148,9 @@ func TestSemanticProgressTTYHeartbeatAnimatesBetweenCompletedBatches(t *testing.
 	})
 
 	renderer.pulse(renderer.lastUpdate.Add(2 * time.Second))
-	renderer.Finish()
+	if err := renderer.Finish(); err != nil {
+		t.Fatal(err)
+	}
 
 	text := output.String()
 	if strings.Count(text, "\r") < 2 {
@@ -204,12 +221,38 @@ func TestDisclosureIsWrittenBeforeFirstJudgeCall(t *testing.T) {
 	renderer := newSemanticProgressRenderer(tr, &output, false)
 	config := analyze.SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 0, Progress: renderer.Update}
 	_, err = analyze.NewSemanticEngine(config).Analyze([]analyze.SemanticInput{{TurnID: "one", Prompt: "private"}})
-	renderer.Finish()
+	finishErr := renderer.Finish()
 	if err == nil {
 		t.Fatal("expected injected Judge failure")
 	}
 	if !runner.seen {
 		t.Fatalf("privacy disclosure was not written before Judge call: %q", output.String())
+	}
+	if finishErr != nil {
+		t.Fatalf("Finish() error = %v", finishErr)
+	}
+}
+
+func TestProgressWriterFailureIsRetainedAndStopsJudge(t *testing.T) {
+	tr, err := i18n.New("en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := newSemanticProgressRenderer(tr, failingProgressWriter{err: io.ErrClosedPipe}, false)
+	runner := &disclosureCheckingRunner{output: &bytes.Buffer{}}
+	config := analyze.SemanticConfig{
+		Runner:    progressGuardRunner{runner: runner, renderer: renderer},
+		Workers:   1,
+		BatchSize: 1,
+		Progress:  renderer.Update,
+	}
+	_, analyzeErr := analyze.NewSemanticEngine(config).Analyze([]analyze.SemanticInput{{TurnID: "one", Prompt: "private"}})
+	finishErr := renderer.Finish()
+	if !errors.Is(analyzeErr, io.ErrClosedPipe) || !errors.Is(finishErr, io.ErrClosedPipe) {
+		t.Fatalf("analysis/finish errors = %v / %v, want retained writer cause", analyzeErr, finishErr)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("Judge runner called %d times after privacy disclosure failed", runner.calls)
 	}
 }
 

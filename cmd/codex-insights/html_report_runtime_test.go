@@ -4,19 +4,118 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/axcherednikov/codex-insights/internal/analyze"
 	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
+
+type trackingListener struct {
+	net.Listener
+	closed bool
+}
+
+type delayedAcceptListener struct {
+	net.Listener
+	accepted chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	closeErr error
+	wrapConn func(net.Conn) net.Conn
+}
+
+func (listener *delayedAcceptListener) Accept() (net.Conn, error) {
+	connection, err := listener.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	listener.accepted <- struct{}{}
+	<-listener.release
+	if listener.wrapConn != nil {
+		connection = listener.wrapConn(connection)
+	}
+	return connection, nil
+}
+
+func (listener *delayedAcceptListener) Close() error {
+	listener.once.Do(func() { close(listener.release) })
+	return errors.Join(listener.Listener.Close(), listener.closeErr)
+}
+
+type sentinelCloseConn struct {
+	net.Conn
+	err error
+}
+
+func (connection sentinelCloseConn) Close() error {
+	return errors.Join(connection.Conn.Close(), connection.err)
+}
+
+type failingAcceptListener struct{ err error }
+
+func (listener failingAcceptListener) Accept() (net.Conn, error) { return nil, listener.err }
+func (listener failingAcceptListener) Close() error              { return nil }
+func (listener failingAcceptListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 54321}
+}
+
+type pendingOpenerFailureListener struct {
+	err           error
+	acceptStarted chan struct{}
+	closed        chan struct{}
+	closeOnce     sync.Once
+}
+
+func (listener *pendingOpenerFailureListener) Accept() (net.Conn, error) {
+	close(listener.acceptStarted)
+	return nil, listener.err
+}
+
+func (listener *pendingOpenerFailureListener) Close() error {
+	listener.closeOnce.Do(func() { close(listener.closed) })
+	return nil
+}
+
+func (listener *pendingOpenerFailureListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 54321}
+}
+
+func (listener *trackingListener) Close() error {
+	listener.closed = true
+	return listener.Listener.Close()
+}
+
+type failingHTTPResponseWriter struct {
+	header http.Header
+	err    error
+}
+
+func (writer *failingHTTPResponseWriter) Header() http.Header {
+	if writer.header == nil {
+		writer.header = make(http.Header)
+	}
+	return writer.header
+}
+
+func (writer *failingHTTPResponseWriter) WriteHeader(int) {}
+
+func (writer *failingHTTPResponseWriter) Write([]byte) (int, error) {
+	return 0, writer.err
+}
+
+type htmlContextKey struct{}
 
 func TestAggregateHTMLLabelsIsDeterministic(t *testing.T) {
 	labels := aggregateHTMLLabels(semanticReportResults{
@@ -95,7 +194,7 @@ func TestHTMLReportServerIsLoopbackOnlyAndStopsOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var openedURL string
-	server, err := startHTMLReportServer(ctx, artifact, func(url string) error {
+	server, err := startHTMLReportServer(ctx, artifact, func(_ context.Context, url string) error {
 		openedURL = url
 		return nil
 	}, io.Discard)
@@ -153,6 +252,291 @@ func TestHTMLReportServerIsLoopbackOnlyAndStopsOnCancellation(t *testing.T) {
 	}
 }
 
+func TestHTMLShutdownWaitsForLateAcceptAdmissionBarrier(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, time.Now, "<html>current</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	underlying, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := &delayedAcceptListener{Listener: underlying, accepted: make(chan struct{}, 1), release: make(chan struct{})}
+	t.Cleanup(func() { _ = listener.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := startHTMLReportServerWithListener(ctx, artifact, nil, io.Discard, func(string, string) (net.Listener, error) {
+		return listener, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case <-listener.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("listener did not accept the raw client connection")
+	}
+	cancel()
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- server.Wait() }()
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not finish promptly after the accept-admission barrier")
+	}
+	assertHTMLLifecycleDone(t, server)
+	if err := client.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Read(make([]byte, 1)); err == nil {
+		t.Fatal("late raw client connection remained open after shutdown")
+	}
+}
+
+func TestHTMLShutdownRetainsLateConnectionAndListenerCloseErrors(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, time.Now, "<html>current</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	underlying, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionErr := errors.New("synthetic connection close failure")
+	listenerErr := errors.New("synthetic listener close failure")
+	listener := &delayedAcceptListener{
+		Listener: underlying,
+		accepted: make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		closeErr: listenerErr,
+		wrapConn: func(connection net.Conn) net.Conn { return sentinelCloseConn{Conn: connection, err: connectionErr} },
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := startHTMLReportServerWithListener(ctx, artifact, nil, io.Discard, func(string, string) (net.Listener, error) {
+		return listener, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := net.DialTimeout("tcp", listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case <-listener.accepted:
+	case <-time.After(time.Second):
+		t.Fatal("listener did not accept the raw client connection")
+	}
+	cancel()
+	result := make(chan error, 1)
+	go func() { result <- server.Wait() }()
+	select {
+	case err := <-result:
+		if !errors.Is(err, connectionErr) || !errors.Is(err, listenerErr) {
+			t.Fatalf("Wait() error = %v, want connection and listener close failures", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait did not complete after joining late connection cleanup")
+	}
+	assertHTMLLifecycleDone(t, server)
+}
+
+func TestHTMLShutdownDrainsActiveRequest(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		_, _ = io.WriteString(response, "complete response")
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := syntheticHTMLServer(handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startHTMLServerLifecycle(ctx, server, listener)
+	responseResult := make(chan struct {
+		body string
+		err  error
+	}, 1)
+	go func() {
+		response, requestErr := http.Get("http://" + listener.Addr().String() + "/")
+		if requestErr != nil {
+			responseResult <- struct {
+				body string
+				err  error
+			}{err: requestErr}
+			return
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		responseResult <- struct {
+			body string
+			err  error
+		}{body: string(body), err: readErr}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("synthetic request handler did not start")
+	}
+	cancel()
+	select {
+	case <-server.serveDone:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop accepting after cancellation")
+	}
+	close(release)
+	select {
+	case response := <-responseResult:
+		if response.err != nil || response.body != "complete response" {
+			t.Fatalf("active request result = %q, %v", response.body, response.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active request did not finish after release")
+	}
+	result := make(chan error, 1)
+	go func() { result <- server.Wait() }()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("graceful shutdown did not complete after active request drained")
+	}
+}
+
+func TestHTMLServeFailureReturnsWithoutContextCancellation(t *testing.T) {
+	serveErr := errors.New("synthetic accept failure")
+	server := syntheticHTMLServer(http.NotFoundHandler())
+	startHTMLServerLifecycle(context.Background(), server, failingAcceptListener{err: serveErr})
+	result := make(chan error, 1)
+	go func() { result <- server.Wait() }()
+	select {
+	case err := <-result:
+		if !errors.Is(err, serveErr) {
+			t.Fatalf("Wait() error = %v, want Serve failure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait waited for parent cancellation after Serve failed")
+	}
+}
+
+func TestHTMLServeFailureCancelsPendingOpenerAndReturnsServeError(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, time.Now, "<html>current</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErr := errors.New("synthetic early accept failure")
+	listener := &pendingOpenerFailureListener{
+		err: serveErr, acceptStarted: make(chan struct{}), closed: make(chan struct{}),
+	}
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	openerStarted := make(chan struct{})
+	openerCanceled := make(chan struct{})
+	startupResult := make(chan struct {
+		server *htmlReportServer
+		err    error
+	}, 1)
+	go func() {
+		server, startErr := startHTMLReportServerWithListener(parent, artifact, func(openerContext context.Context, _ string) error {
+			close(openerStarted)
+			<-openerContext.Done()
+			close(openerCanceled)
+			return fmt.Errorf("reap synthetic launcher: %w", openerContext.Err())
+		}, io.Discard, func(string, string) (net.Listener, error) {
+			return listener, nil
+		})
+		startupResult <- struct {
+			server *htmlReportServer
+			err    error
+		}{server: server, err: startErr}
+	}()
+	for name, signal := range map[string]<-chan struct{}{"opener start": openerStarted, "Serve start": listener.acceptStarted} {
+		select {
+		case <-signal:
+		case <-time.After(time.Second):
+			cancelParent()
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+	var started struct {
+		server *htmlReportServer
+		err    error
+	}
+	select {
+	case started = <-startupResult:
+	case <-time.After(time.Second):
+		cancelParent()
+		started = <-startupResult
+		if started.server != nil {
+			_ = started.server.Wait()
+		}
+		t.Fatal("startup remained blocked after Serve failed while parent context was live")
+	}
+	if parent.Err() != nil {
+		t.Fatalf("parent context was canceled: %v", parent.Err())
+	}
+	if started.server != nil || !errors.Is(started.err, serveErr) {
+		t.Fatalf("server=%v startup error=%v, want Serve failure", started.server, started.err)
+	}
+	for name, signal := range map[string]<-chan struct{}{"opener reaped": openerCanceled, "listener closed": listener.closed} {
+		select {
+		case <-signal:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+}
+
+func syntheticHTMLServer(handler http.Handler) *htmlReportServer {
+	server := &htmlReportServer{
+		server:         &http.Server{Handler: handler},
+		serveDone:      make(chan struct{}),
+		shutdownDone:   make(chan struct{}),
+		newConnections: make(map[net.Conn]struct{}),
+	}
+	server.server.ConnState = func(connection net.Conn, state http.ConnState) {
+		server.responseMu.Lock()
+		defer server.responseMu.Unlock()
+		if state == http.StateNew {
+			server.newConnections[connection] = struct{}{}
+		} else {
+			delete(server.newConnections, connection)
+		}
+	}
+	return server
+}
+
+func assertHTMLLifecycleDone(t *testing.T, server *htmlReportServer) {
+	t.Helper()
+	for label, done := range map[string]<-chan struct{}{"Serve": server.serveDone, "shutdown": server.shutdownDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Errorf("%s lifecycle was not joined", label)
+		}
+	}
+}
+
 func TestHTMLReportServerWarnsWhenBrowserOpenFails(t *testing.T) {
 	root := t.TempDir()
 	artifact, err := createHTMLReport(root, func() time.Time { return time.Now().UTC() }, "<html>current</html>")
@@ -162,7 +546,7 @@ func TestHTMLReportServerWarnsWhenBrowserOpenFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var output bytes.Buffer
-	server, err := startHTMLReportServer(ctx, artifact, func(string) error { return errors.New("browser unavailable") }, &output)
+	server, err := startHTMLReportServer(ctx, artifact, func(context.Context, string) error { return errors.New("browser unavailable") }, &output)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,15 +559,133 @@ func TestHTMLReportServerWarnsWhenBrowserOpenFails(t *testing.T) {
 	}
 }
 
+func TestHTMLReportServerServesWhileBrowserLauncherIsPending(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, time.Now, "<html>served before launcher exit</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requestResult := make(chan error, 1)
+	launcherRelease := make(chan struct{})
+	startResult := make(chan struct {
+		server *htmlReportServer
+		err    error
+	}, 1)
+	go func() {
+		server, startErr := startHTMLReportServer(ctx, artifact, func(_ context.Context, reportURL string) error {
+			response, requestErr := http.Get(reportURL)
+			if requestErr == nil {
+				body, readErr := io.ReadAll(response.Body)
+				closeErr := response.Body.Close()
+				if response.StatusCode != http.StatusOK || string(body) != "<html>served before launcher exit</html>" {
+					requestErr = fmt.Errorf("HTTP response status=%d body=%q", response.StatusCode, body)
+				}
+				requestErr = errors.Join(requestErr, readErr, closeErr)
+			}
+			requestResult <- requestErr
+			<-launcherRelease
+			return requestErr
+		}, io.Discard)
+		startResult <- struct {
+			server *htmlReportServer
+			err    error
+		}{server: server, err: startErr}
+	}()
+	select {
+	case requestErr := <-requestResult:
+		if requestErr != nil {
+			close(launcherRelease)
+			t.Fatalf("HTTP request while browser launcher was pending: %v", requestErr)
+		}
+	case <-time.After(time.Second):
+		close(launcherRelease)
+		t.Fatal("HTTP report was not served while browser launcher was pending")
+	}
+	close(launcherRelease)
+	started := <-startResult
+	if started.err != nil || started.server == nil {
+		t.Fatalf("server=%v start error=%v", started.server, started.err)
+	}
+	cancel()
+	if err := started.server.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTMLReportServerStartupOutputFailuresCloseListener(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, func() time.Time { return time.Now().UTC() }, "<html>current</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		opener htmlBrowserOpener
+	}{
+		{name: "report address"},
+		{name: "browser warning", opener: func(context.Context, string) error { return errors.New("browser unavailable") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tracked := &trackingListener{Listener: listener}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			server, err := startHTMLReportServerWithListener(ctx, artifact, test.opener, failingProgressWriter{err: io.ErrClosedPipe}, func(string, string) (net.Listener, error) {
+				return tracked, nil
+			})
+			if server != nil || !errors.Is(err, io.ErrClosedPipe) || !tracked.closed {
+				t.Fatalf("server=%v error=%v listenerClosed=%v", server, err, tracked.closed)
+			}
+		})
+	}
+}
+
+func TestHTMLReportServerWaitReturnsResponseWriteFailures(t *testing.T) {
+	root := t.TempDir()
+	artifact, err := createHTMLReport(root, func() time.Time { return time.Now().UTC() }, "<html>current</html>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	server, err := startHTMLReportServer(ctx, artifact, nil, io.Discard)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, server.URL+"/", nil)
+	request.Host = strings.TrimPrefix(server.URL, "http://")
+	response := &failingHTTPResponseWriter{err: io.ErrClosedPipe}
+	server.server.Handler.ServeHTTP(response, request)
+	cancel()
+	if err := server.Wait(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Wait() error = %v, want response writer failure", err)
+	}
+}
+
+func TestHTMLShutdownContextRetainsValuesAfterCancellation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.WithValue(context.Background(), htmlContextKey{}, "retained"))
+	cancel()
+	shutdown, stop := newHTMLShutdownContext(parent)
+	defer stop()
+	if shutdown.Value(htmlContextKey{}) != "retained" || shutdown.Err() != nil {
+		t.Fatalf("shutdown context value/error = %v/%v", shutdown.Value(htmlContextKey{}), shutdown.Err())
+	}
+}
+
 func TestHTMLBrowserCommandSelection(t *testing.T) {
 	tests := []struct {
 		goos string
 		name string
 		args []string
 	}{
-		{goos: "darwin", name: "open", args: []string{"https://example.test/report"}},
-		{goos: "linux", name: "xdg-open", args: []string{"https://example.test/report"}},
-		{goos: "windows", name: "rundll32", args: []string{"url.dll,FileProtocolHandler", "https://example.test/report"}},
+		{goos: "darwin", name: "open", args: []string{"http://127.0.0.1:54321/"}},
+		{goos: "linux", name: "xdg-open", args: []string{"http://127.0.0.1:54321/"}},
+		{goos: "windows", name: "rundll32", args: []string{"url.dll,FileProtocolHandler", "http://127.0.0.1:54321/"}},
 	}
 	for _, test := range tests {
 		name, args, err := htmlBrowserCommand(test.goos, test.args[len(test.args)-1])
@@ -194,8 +696,29 @@ func TestHTMLBrowserCommandSelection(t *testing.T) {
 			t.Errorf("htmlBrowserCommand(%q) = %q %#v, want %q %#v", test.goos, name, args, test.name, test.args)
 		}
 	}
-	if _, _, err := htmlBrowserCommand("plan9", "https://example.test/report"); err == nil {
+	if _, _, err := htmlBrowserCommand("plan9", "http://127.0.0.1:54321/"); !errors.Is(err, errUnsupportedBrowserOS) {
 		t.Error("unsupported OS did not return an error")
+	}
+}
+
+func TestHTMLBrowserRejectsUnsafeURLsAndHonorsCanceledContext(t *testing.T) {
+	for _, raw := range []string{
+		"https://127.0.0.1:54321/",
+		"http://example.com:54321/",
+		"http://127.0.0.1/",
+		"http://127.0.0.1:54321/private",
+		"http://user@127.0.0.1:54321/",
+		"http://127.0.0.1:54321/?secret=1",
+		"http://127.0.0.1:54321/#fragment",
+	} {
+		if err := validateHTMLBrowserURL(raw); !errors.Is(err, errInvalidBrowserURL) {
+			t.Errorf("validateHTMLBrowserURL(%q) error = %v", raw, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := openHTMLBrowser(ctx, "http://127.0.0.1:54321/"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled browser launch error = %v", err)
 	}
 }
 

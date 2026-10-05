@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"fmt"
 	"io/fs"
 	"path/filepath"
 )
@@ -24,5 +25,9 @@ func FindRollouts(root string) ([]string, error) {
 		return nil
 	})
 
-	return files, err
+	if err != nil {
+		return nil, fmt.Errorf("walk rollout directory %q: %w", root, err)
+	}
+
+	return files, nil
 }

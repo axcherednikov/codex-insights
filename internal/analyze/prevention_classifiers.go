@@ -13,6 +13,7 @@ func expectedFollowupIDs(cases []sessions.Followup) map[string]struct{} {
 	for _, item := range cases {
 		expected[item.PreviousTurnID] = struct{}{}
 	}
+
 	return expected
 }
 
@@ -33,6 +34,7 @@ func preventionCases(
 			cases = append(cases, followup)
 		}
 	}
+
 	return cases
 }
 

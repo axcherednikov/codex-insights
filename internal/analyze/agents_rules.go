@@ -13,6 +13,8 @@ import (
 
 const agentsRulesCacheVersion = "agents-rules-v1"
 
+const agentsRulesBatchSize = 10
+
 type AgentsRuleResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
 	Rule           string  `json:"rule"`
@@ -38,9 +40,10 @@ type AgentsRulesAnalyzer struct {
 func NewAgentsRulesAnalyzer() (AgentsRulesAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return AgentsRulesAnalyzer{}, err
+		return AgentsRulesAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
-	return AgentsRulesAnalyzer{runner: judge.New(), cache: store, batchSize: 10}, nil
+
+	return AgentsRulesAnalyzer{runner: judge.New(), cache: store, batchSize: agentsRulesBatchSize}, nil
 }
 
 func (a AgentsRulesAnalyzer) Analyze(
@@ -49,17 +52,65 @@ func (a AgentsRulesAnalyzer) Analyze(
 ) (AgentsRulesAnalysis, error) {
 	cases := preventionCases(followups, preventionResults, "agents_md")
 	analysis := AgentsRulesAnalysis{Results: make([]AgentsRuleResult, 0, len(cases))}
+	resultsByTurn, pending, cacheHits := a.selectPending(cases)
+	analysis.CacheHits = cacheHits
+
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return AgentsRulesAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
+
+	analysis.Results, err = assembleAgentsRulesAnalysis(cases, resultsByTurn)
+	if err != nil {
+		return AgentsRulesAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a AgentsRulesAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]AgentsRuleResult, []sessions.Followup, int) {
 	resultsByTurn := make(map[string]AgentsRuleResult, len(cases))
 	pending := make([]sessions.Followup, 0, len(cases))
+	cacheHits := 0
 	for _, item := range cases {
 		var cached AgentsRuleResult
 		if a.cache != nil && a.cache.Get(agentsRulesCacheKey(item), &cached) && cached.PreviousTurnID == item.PreviousTurnID && isAgentsRule(cached.Rule) {
 			resultsByTurn[item.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
 		pending = append(pending, item)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assembleAgentsRulesAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]AgentsRuleResult,
+) ([]AgentsRuleResult, error) {
+	results := make([]AgentsRuleResult, 0, len(cases))
+	for _, item := range cases {
+		result, ok := resultsByTurn[item.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingAgentsRuleResult, item.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a AgentsRulesAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]AgentsRuleResult,
+) (int, error) {
+	var evaluated int
+
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
 		if end > len(pending) {
@@ -68,9 +119,9 @@ func (a AgentsRulesAnalyzer) Analyze(
 		batch := pending[start:end]
 		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return AgentsRulesAnalysis{}, fmt.Errorf("analyze AGENTS.md rules batch %d-%d: %w", start, end, err)
+			return 0, fmt.Errorf("analyze AGENTS.md rules batch %d-%d: %w", start, end, err)
 		}
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 		for _, result := range results {
 			resultsByTurn[result.PreviousTurnID] = result
 		}
@@ -81,22 +132,16 @@ func (a AgentsRulesAnalyzer) Analyze(
 					continue
 				}
 				if err := a.cache.Set(agentsRulesCacheKey(item), result); err != nil {
-					return AgentsRulesAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 			if err := a.cache.Save(); err != nil {
-				return AgentsRulesAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
-	for _, item := range cases {
-		result, ok := resultsByTurn[item.PreviousTurnID]
-		if !ok {
-			return AgentsRulesAnalysis{}, fmt.Errorf("missing AGENTS.md rule result for turn %q", item.PreviousTurnID)
-		}
-		analysis.Results = append(analysis.Results, result)
-	}
-	return analysis, nil
+
+	return evaluated, nil
 }
 
 func (a AgentsRulesAnalyzer) analyzeBatch(cases []sessions.Followup) ([]AgentsRuleResult, error) {
@@ -104,10 +149,8 @@ func (a AgentsRulesAnalyzer) analyzeBatch(cases []sessions.Followup) ([]AgentsRu
 	for _, item := range cases {
 		records = append(records, followupJudgeRecord{PreviousTurnID: item.PreviousTurnID, PreviousAnswer: item.PreviousAnswer, Followup: item.Prompt})
 	}
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal AGENTS.md rule cases: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 	prompt := `Classify the primary recurring project-level rule that would have prevented the failure in each steering case.
 
 Rules:
@@ -126,11 +169,12 @@ Records:
 ` + string(data)
 	var response agentsRulesResponse
 	if err := a.runner.Run(prompt, agentsRulesSchema(), &response); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 	if err := validateAgentsRulesResults(cases, response.Results); err != nil {
 		return nil, err
 	}
+
 	return response.Results, nil
 }
 
@@ -139,19 +183,20 @@ func validateAgentsRulesResults(cases []sessions.Followup, results []AgentsRuleR
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return fmt.Errorf("judge returned unexpected turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return fmt.Errorf("judge returned duplicate turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 		if !isAgentsRule(result.Rule) {
-			return fmt.Errorf("judge returned unsupported AGENTS.md rule %q", result.Rule)
+			return fmt.Errorf("%w %q", errUnsupportedAgentsRule, result.Rule)
 		}
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 	if len(seen) != len(expected) {
-		return fmt.Errorf("judge returned %d results, expected %d", len(seen), len(expected))
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
+
 	return nil
 }
 
@@ -164,6 +209,7 @@ func agentsRulesCacheKey(item sessions.Followup) string {
 	hash.Write([]byte(item.PreviousAnswer))
 	hash.Write([]byte{0})
 	hash.Write([]byte(item.Prompt))
+
 	return "agents-rules:" + hex.EncodeToString(hash.Sum(nil))
 }
 

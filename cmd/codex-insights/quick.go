@@ -17,6 +17,20 @@ type modelStat struct {
 	Count int
 }
 
+type quickStats struct {
+	statusCounts           map[string]int
+	modelCounts            map[string]int
+	sessionCount           int
+	turnCount              int
+	completedCount         int
+	totalTokens            int64
+	totalDurationMS        int64
+	totalToolCalls         int64
+	readErrors             int
+	excludedJudgeSessions  int
+	legacyExcludedSessions int
+}
+
 func runQuick(args []string) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -33,7 +47,7 @@ func runQuick(args []string) {
 
 	days := fs.Int(
 		"days",
-		30,
+		quickDefaultDays,
 		"number of days to analyze; 0 means all history",
 	)
 
@@ -64,21 +78,9 @@ func runQuick(args []string) {
 		fatal(err)
 	}
 
-	before := time.Now().UTC()
-
-	if *beforeRaw != "" {
-		parsed, err := time.Parse(time.RFC3339, *beforeRaw)
-		if err != nil {
-			fatal(fmt.Errorf("invalid --before: %w", err))
-		}
-
-		before = parsed
-	}
-
-	var since time.Time
-
-	if *days > 0 {
-		since = before.Add(-time.Duration(*days) * 24 * time.Hour)
+	before, since, err := quickWindow(*beforeRaw, *days)
+	if err != nil {
+		fatal(err)
 	}
 
 	files, err := sessions.FindRollouts(*sessionsPath)
@@ -86,110 +88,114 @@ func runQuick(args []string) {
 		fatal(err)
 	}
 
-	statusCounts := map[string]int{}
-	modelCounts := map[string]int{}
+	stats := collectQuickStats(files, since, before, *legacyExcludeOriginator)
+	printQuickReport(tr, *days, before, *legacyExcludeOriginator, stats)
+}
 
-	var (
-		sessionCount           int
-		turnCount              int
-		completedCount         int
-		totalTokens            int64
-		totalDurationMS        int64
-		totalToolCalls         int64
-		readErrors             int
-		excludedJudgeSessions  int
-		legacyExcludedSessions int
-	)
+func quickWindow(beforeRaw string, days int) (time.Time, time.Time, error) {
+	before := time.Now().UTC()
+	if beforeRaw != "" {
+		parsed, err := time.Parse(time.RFC3339, beforeRaw)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("invalid --before: %w", err)
+		}
+		before = parsed
+	}
+	if days <= 0 {
+		return before, time.Time{}, nil
+	}
 
+	return before, before.Add(-time.Duration(days) * 24 * time.Hour), nil
+}
+
+func collectQuickStats(files []string, since, before time.Time, legacyOriginator string) quickStats {
+	stats := quickStats{statusCounts: make(map[string]int), modelCounts: make(map[string]int)}
 	for _, file := range files {
-		meta, err := sessions.ReadMeta(file)
-		if err != nil {
-			readErrors++
-			continue
+		collectQuickFile(&stats, file, since, before, legacyOriginator)
+	}
+
+	return stats
+}
+
+func collectQuickFile(stats *quickStats, file string, since, before time.Time, legacyOriginator string) {
+	meta, err := sessions.ReadMeta(file)
+	if err != nil {
+		stats.readErrors++
+
+		return
+	}
+	if meta.ThreadSource != "user" {
+		return
+	}
+	isJudge, err := sessions.IsInsightsJudgeSession(file)
+	if err != nil {
+		stats.readErrors++
+
+		return
+	}
+	if isJudge {
+		if timestampInWindow(meta.StartedAt, since, before) {
+			stats.excludedJudgeSessions++
 		}
 
-		if meta.ThreadSource != "user" {
-			continue
-		}
+		return
+	}
+	if legacyOriginator != "" && meta.Originator == legacyOriginator {
+		stats.legacyExcludedSessions++
 
-		isJudge, err := sessions.IsInsightsJudgeSession(file)
-		if err != nil {
-			readErrors++
-			continue
-		}
+		return
+	}
+	turns, err := sessions.ParseTurns(file, before)
+	if err != nil {
+		stats.readErrors++
 
-		if isJudge {
-			if timestampInWindow(meta.StartedAt, since, before) {
-				excludedJudgeSessions++
-			}
-			continue
-		}
-
-		if *legacyExcludeOriginator != "" &&
-			meta.Originator == *legacyExcludeOriginator {
-			legacyExcludedSessions++
-			continue
-		}
-
-		turns, err := sessions.ParseTurns(file, before)
-		if err != nil {
-			readErrors++
-			continue
-		}
-
-		sessionHasTurns := false
-
-		for _, turn := range turns {
-			startedAt, err := time.Parse(
-				time.RFC3339Nano,
-				turn.StartedAt,
-			)
-			if err != nil {
-				continue
-			}
-
-			if startedAt.After(before) {
-				continue
-			}
-
-			if !since.IsZero() && startedAt.Before(since) {
-				continue
-			}
-
-			sessionHasTurns = true
-			turnCount++
-			statusCounts[turn.Status]++
-
-			modelKey := turn.Model + "\t" + turn.Effort
-			modelCounts[modelKey]++
-
-			if turn.Status == "complete" {
-				completedCount++
-				totalTokens += turn.Tokens
-				totalDurationMS += turn.DurationMS
-				totalToolCalls += int64(turn.ToolCalls)
-			}
-		}
-
-		if sessionHasTurns {
-			sessionCount++
+		return
+	}
+	hasTurns := false
+	for _, turn := range turns {
+		if addQuickTurn(stats, turn, since, before) {
+			hasTurns = true
 		}
 	}
+	if hasTurns {
+		stats.sessionCount++
+	}
+}
+
+func addQuickTurn(stats *quickStats, turn sessions.Turn, since, before time.Time) bool {
+	startedAt, err := time.Parse(time.RFC3339Nano, turn.StartedAt)
+	if err != nil || startedAt.After(before) || (!since.IsZero() && startedAt.Before(since)) {
+		return false
+	}
+	stats.turnCount++
+	stats.statusCounts[turn.Status]++
+	stats.modelCounts[turn.Model+"\t"+turn.Effort]++
+	if turn.Status == "complete" {
+		stats.completedCount++
+		stats.totalTokens += turn.Tokens
+		stats.totalDurationMS += turn.DurationMS
+		stats.totalToolCalls += int64(turn.ToolCalls)
+	}
+
+	return true
+}
+
+func printQuickReport(tr i18n.Translator, days int, before time.Time, legacyOriginator string, stats quickStats) {
 
 	fmt.Println(tr.T("quick_title"))
 	fmt.Println("====================")
 
 	fmt.Printf("%s: ", tr.T("period"))
 
-	if *days == 0 {
+	if days == 0 {
 		fmt.Print(tr.T("all_history"))
 	} else {
-		fmt.Printf(tr.T("last_days"), *days)
+		fmt.Printf(tr.T("last_days"), days)
 	}
 
 	fmt.Printf(" — %s\n", before.Format(time.RFC3339))
-	fmt.Printf("%s: %d\n", tr.T("user_sessions"), sessionCount)
-	fmt.Printf("%s: %d\n", tr.T("tasks"), turnCount)
+	fmt.Printf("%s: %d\n", tr.T("user_sessions"), stats.sessionCount)
+	fmt.Printf("%s: %d\n", tr.T("tasks"), stats.turnCount)
 
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("status"))
@@ -199,7 +205,7 @@ func runQuick(args []string) {
 		"aborted",
 		"incomplete",
 	} {
-		if count := statusCounts[status]; count > 0 {
+		if count := stats.statusCounts[status]; count > 0 {
 			fmt.Printf(
 				"  %-16s %d\n",
 				tr.T(status),
@@ -208,47 +214,47 @@ func runQuick(args []string) {
 		}
 	}
 
-	if completedCount > 0 {
+	if stats.completedCount > 0 {
 		fmt.Println()
 		fmt.Printf("%s:\n", tr.T("completed_averages"))
 
 		fmt.Printf(
 			"  %-22s %.0f\n",
 			tr.T("tokens")+":",
-			float64(totalTokens)/float64(completedCount),
+			float64(stats.totalTokens)/float64(stats.completedCount),
 		)
 
 		fmt.Printf(
 			"  %-22s %.1f %s\n",
 			tr.T("duration")+":",
-			float64(totalDurationMS)/float64(completedCount)/1000,
+			float64(stats.totalDurationMS)/float64(stats.completedCount)/secondsPerMillisecond,
 			tr.T("seconds_short"),
 		)
 
 		fmt.Printf(
 			"  %-22s %.1f\n",
 			tr.T("tool_calls")+":",
-			float64(totalToolCalls)/float64(completedCount),
+			float64(stats.totalToolCalls)/float64(stats.completedCount),
 		)
 	}
 
-	stats := make([]modelStat, 0, len(modelCounts))
+	models := make([]modelStat, 0, len(stats.modelCounts))
 
-	for key, count := range modelCounts {
-		stats = append(stats, modelStat{
+	for key, count := range stats.modelCounts {
+		models = append(models, modelStat{
 			Key:   key,
 			Count: count,
 		})
 	}
 
-	sort.Slice(stats, func(i, j int) bool {
-		return stats[i].Count > stats[j].Count
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Count > models[j].Count
 	})
 
 	fmt.Println()
 	fmt.Printf("%s:\n", tr.T("model_reasoning"))
 
-	for _, stat := range stats {
+	for _, stat := range models {
 		fmt.Printf("  %4d  %s\n", stat.Count, stat.Key)
 	}
 
@@ -256,22 +262,22 @@ func runQuick(args []string) {
 	fmt.Printf(
 		"%s: %d\n",
 		tr.T("auto_excluded_judges"),
-		excludedJudgeSessions,
+		stats.excludedJudgeSessions,
 	)
 
-	if *legacyExcludeOriginator != "" {
+	if legacyOriginator != "" {
 		fmt.Printf(
 			tr.T("legacy_excluded")+": %d\n",
-			*legacyExcludeOriginator,
-			legacyExcludedSessions,
+			legacyOriginator,
+			stats.legacyExcludedSessions,
 		)
 	}
 
-	if readErrors > 0 {
+	if stats.readErrors > 0 {
 		fmt.Printf(
 			"%s: %d\n",
 			tr.T("read_errors"),
-			readErrors,
+			stats.readErrors,
 		)
 	}
 }

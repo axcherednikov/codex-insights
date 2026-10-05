@@ -13,6 +13,8 @@ import (
 
 const promptQualityCacheVersion = "prompt-quality-v1"
 
+const promptQualityBatchSize = 10
+
 // PromptQualityResult identifies the primary prompt defect for a steering case.
 type PromptQualityResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
@@ -39,10 +41,10 @@ type PromptQualityAnalyzer struct {
 func NewPromptQualityAnalyzer() (PromptQualityAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return PromptQualityAnalyzer{}, err
+		return PromptQualityAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
 
-	return PromptQualityAnalyzer{runner: judge.New(), cache: store, batchSize: 10}, nil
+	return PromptQualityAnalyzer{runner: judge.New(), cache: store, batchSize: promptQualityBatchSize}, nil
 }
 
 func (a PromptQualityAnalyzer) Analyze(
@@ -51,18 +53,64 @@ func (a PromptQualityAnalyzer) Analyze(
 ) (PromptQualityAnalysis, error) {
 	cases := preventionCases(followups, preventionResults, "task_prompt")
 	analysis := PromptQualityAnalysis{Results: make([]PromptQualityResult, 0, len(cases))}
+	resultsByTurn, pending, cacheHits := a.selectPending(cases)
+	analysis.CacheHits = cacheHits
+
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return PromptQualityAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
+
+	analysis.Results, err = assemblePromptQualityAnalysis(cases, resultsByTurn)
+	if err != nil {
+		return PromptQualityAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a PromptQualityAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]PromptQualityResult, []sessions.Followup, int) {
 	resultsByTurn := make(map[string]PromptQualityResult, len(cases))
 	pending := make([]sessions.Followup, 0, len(cases))
-
+	cacheHits := 0
 	for _, item := range cases {
 		var cached PromptQualityResult
 		if a.cache != nil && a.cache.Get(promptQualityCacheKey(item), &cached) && cached.PreviousTurnID == item.PreviousTurnID && isPromptQualityIssue(cached.Issue) {
 			resultsByTurn[item.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
 		pending = append(pending, item)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assemblePromptQualityAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]PromptQualityResult,
+) ([]PromptQualityResult, error) {
+	results := make([]PromptQualityResult, 0, len(cases))
+	for _, item := range cases {
+		result, ok := resultsByTurn[item.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingPromptQualityResult, item.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a PromptQualityAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]PromptQualityResult,
+) (int, error) {
+	var evaluated int
 
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
@@ -72,9 +120,9 @@ func (a PromptQualityAnalyzer) Analyze(
 		batch := pending[start:end]
 		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return PromptQualityAnalysis{}, fmt.Errorf("analyze prompt quality batch %d-%d: %w", start, end, err)
+			return 0, fmt.Errorf("analyze prompt quality batch %d-%d: %w", start, end, err)
 		}
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 		for _, result := range results {
 			resultsByTurn[result.PreviousTurnID] = result
 		}
@@ -85,23 +133,16 @@ func (a PromptQualityAnalyzer) Analyze(
 					continue
 				}
 				if err := a.cache.Set(promptQualityCacheKey(item), result); err != nil {
-					return PromptQualityAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 			if err := a.cache.Save(); err != nil {
-				return PromptQualityAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
 
-	for _, item := range cases {
-		result, ok := resultsByTurn[item.PreviousTurnID]
-		if !ok {
-			return PromptQualityAnalysis{}, fmt.Errorf("missing prompt quality result for turn %q", item.PreviousTurnID)
-		}
-		analysis.Results = append(analysis.Results, result)
-	}
-	return analysis, nil
+	return evaluated, nil
 }
 
 func (a PromptQualityAnalyzer) analyzeBatch(cases []sessions.Followup) ([]PromptQualityResult, error) {
@@ -109,10 +150,8 @@ func (a PromptQualityAnalyzer) analyzeBatch(cases []sessions.Followup) ([]Prompt
 	for _, item := range cases {
 		records = append(records, followupJudgeRecord{PreviousTurnID: item.PreviousTurnID, PreviousAnswer: item.PreviousAnswer, Followup: item.Prompt})
 	}
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal prompt quality cases: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 	prompt := `Classify the primary missing quality in the user's task prompt for each steering case.
 
 Issues:
@@ -130,11 +169,12 @@ Records:
 ` + string(data)
 	var response promptQualityResponse
 	if err := a.runner.Run(prompt, promptQualitySchema(), &response); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 	if err := validatePromptQualityResults(cases, response.Results); err != nil {
 		return nil, err
 	}
+
 	return response.Results, nil
 }
 
@@ -143,19 +183,20 @@ func validatePromptQualityResults(cases []sessions.Followup, results []PromptQua
 	seen := make(map[string]struct{}, len(results))
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return fmt.Errorf("judge returned unexpected turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return fmt.Errorf("judge returned duplicate turn id %q", result.PreviousTurnID)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 		if !isPromptQualityIssue(result.Issue) {
-			return fmt.Errorf("judge returned unsupported prompt quality issue %q", result.Issue)
+			return fmt.Errorf("%w %q", errUnsupportedPromptQuality, result.Issue)
 		}
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 	if len(seen) != len(expected) {
-		return fmt.Errorf("judge returned %d results, expected %d", len(seen), len(expected))
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
+
 	return nil
 }
 
@@ -168,6 +209,7 @@ func promptQualityCacheKey(item sessions.Followup) string {
 	hash.Write([]byte(item.PreviousAnswer))
 	hash.Write([]byte{0})
 	hash.Write([]byte(item.Prompt))
+
 	return "prompt-quality:" + hex.EncodeToString(hash.Sum(nil))
 }
 

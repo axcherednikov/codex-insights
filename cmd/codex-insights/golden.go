@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -15,13 +16,16 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/judge"
 )
 
-const maxGoldenCases = 500
+const (
+	maxGoldenCases         = 500
+	defaultGoldenCaseLimit = 50
+)
 
 func goldenWindow(sessionsPath, beforeRaw string, days int, legacy string) (string, sessionWindow, error) {
 	if sessionsPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", sessionWindow{}, err
+			return "", sessionWindow{}, fmt.Errorf("resolve sessions directory: %w", err)
 		}
 		sessionsPath = filepath.Join(home, ".codex", "sessions")
 	}
@@ -37,6 +41,7 @@ func goldenWindow(sessionsPath, beforeRaw string, days int, legacy string) (stri
 	if days > 0 {
 		since = before.Add(-time.Duration(days) * 24 * time.Hour)
 	}
+
 	return sessionsPath, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: legacy}, nil
 }
 
@@ -44,31 +49,31 @@ func runGoldenExport(args []string) error {
 	fs := flag.NewFlagSet("golden export", flag.ContinueOnError)
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve sessions directory: %w", err)
 	}
 	sessionsPath := fs.String("sessions", filepath.Join(home, ".codex", "sessions"), "path to Codex sessions")
-	days := fs.Int("days", 30, "number of days to scan; 0 means all history")
+	days := fs.Int("days", defaultAnalysisDays, "number of days to scan; 0 means all history")
 	beforeRaw := fs.String("before", "", "scan state before this RFC3339 timestamp")
 	legacy := fs.String("legacy-exclude-originator", "", "exclude historical sessions by originator")
-	limit := fs.Int("limit", 50, "maximum candidate cases (1-500)")
+	limit := fs.Int("limit", defaultGoldenCaseLimit, "maximum candidate cases (1-500)")
 	output := fs.String("output", "", "required output fixture path")
 	lang := fs.String("lang", defaultReportLanguage, "report language: auto, en, ru")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse golden export flags: %w", err)
 	}
 	if *output == "" {
-		return fmt.Errorf("--output is required")
+		return errMissingOutputPath
 	}
 	if *limit < 1 || *limit > maxGoldenCases {
-		return fmt.Errorf("invalid --limit %d; must be between 1 and %d", *limit, maxGoldenCases)
+		return cliValueRangeError{option: "--limit", value: *limit, minimum: 1, maximum: maxGoldenCases, identity: errInvalidGoldenLimit}
 	}
 	resolvedPath, window, err := goldenWindow(*sessionsPath, *beforeRaw, *days, *legacy)
 	if err != nil {
-		return err
+		return fmt.Errorf("select export window: %w", err)
 	}
 	collected, err := collectSessions(resolvedPath, window)
 	if err != nil {
-		return err
+		return fmt.Errorf("collect sessions for golden export: %w", err)
 	}
 	inputs := golden.CollectCandidateInputs(collected.Interactions, collected.Followups)
 	defaults := analyze.DefaultSemanticConfig()
@@ -78,58 +83,92 @@ func runGoldenExport(args []string) error {
 	}
 	tr, err := i18n.New(*lang)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve report language: %w", err)
 	}
 	fmt.Println(tr.T("golden_export_title"))
 	fmt.Printf("%s: %d\n", tr.T("golden_candidate_cases"), len(fixture.Cases))
 	fmt.Printf("%s: %s\n", tr.T("golden_output"), *output)
 	fmt.Println(tr.T("golden_local_only"))
+
 	return nil
 }
 
 func runGoldenEvaluate(args []string) error {
+	fixture, concurrency, translator, defaults, err := loadGoldenEvaluation(args)
+	if err != nil {
+		return err
+	}
+	if err := judge.CheckCLI(); err != nil {
+		return localizedCLIError{message: translator.T("codex_cli_missing"), cause: err}
+	}
+	printGoldenMethodologyWarning(translator, fixture, defaults)
+	metrics, err := evaluateGoldenFixture(translator, defaults.Runner, fixture, concurrency)
+	if err != nil {
+		return err
+	}
+	printGoldenMetrics(translator, metrics)
+
+	return validateGoldenMetrics(metrics)
+}
+
+func loadGoldenEvaluation(args []string) (golden.Fixture, int, i18n.Translator, analyze.SemanticConfig, error) {
 	fs := flag.NewFlagSet("golden evaluate", flag.ContinueOnError)
 	fixturePath := fs.String("fixture", "", "required approved fixture path")
 	concurrency := fs.Int("concurrency", analyze.SemanticDefaultWorkers, "number of semantic Judge workers (1-32)")
 	lang := fs.String("lang", defaultReportLanguage, "report language: auto, en, ru")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, fmt.Errorf("parse golden evaluation flags: %w", err)
 	}
 	if *fixturePath == "" && fs.NArg() == 1 {
 		*fixturePath = fs.Arg(0)
 	}
 	if *fixturePath == "" {
-		return fmt.Errorf("--fixture is required")
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, errMissingFixturePath
 	}
 	if err := validateSemanticConcurrency(*concurrency); err != nil {
-		return err
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, err
 	}
 	fixture, err := golden.Read(*fixturePath)
 	if err != nil {
-		return err
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, fmt.Errorf("read approved golden fixture: %w", err)
 	}
 	if err := fixture.ValidateForEvaluation(); err != nil {
-		return err
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, fmt.Errorf("validate approved golden fixture: %w", err)
 	}
 	defaults := analyze.DefaultSemanticConfig()
 	tr, err := i18n.New(*lang)
 	if err != nil {
-		return err
+		return golden.Fixture{}, 0, i18n.Translator{}, analyze.SemanticConfig{}, fmt.Errorf("resolve report language: %w", err)
 	}
-	if err := judge.CheckCLI(); err != nil {
-		return fmt.Errorf("%s", tr.T("codex_cli_missing"))
-	}
+
+	return fixture, *concurrency, tr, defaults, nil
+}
+
+func printGoldenMethodologyWarning(tr i18n.Translator, fixture golden.Fixture, defaults analyze.SemanticConfig) {
 	currentMethodology := golden.Methodology{MethodologyVersion: defaults.MethodologyVersion, PromptVersion: defaults.PromptVersion, SchemaVersion: defaults.SchemaVersion}
 	if fixture.Methodology != currentMethodology {
 		fmt.Printf("%s\n", fmt.Sprintf(tr.T("golden_methodology_warning"), fixture.Methodology.MethodologyVersion, fixture.Methodology.PromptVersion, fixture.Methodology.SchemaVersion, currentMethodology.MethodologyVersion, currentMethodology.PromptVersion, currentMethodology.SchemaVersion))
 	}
+}
+
+func evaluateGoldenFixture(tr i18n.Translator, runner analyze.SemanticRunner, fixture golden.Fixture, concurrency int) (golden.Metrics, error) {
 	renderer := newSemanticProgressRenderer(tr, os.Stdout, stdoutIsTTY())
-	_, metrics, err := golden.Evaluate(fixture, defaults.Runner, *concurrency, renderer.Update)
-	if err != nil {
-		renderer.Finish()
-		return err
+	_, metrics, analysisErr := golden.Evaluate(fixture, progressGuardRunner{runner: runner, renderer: renderer}, concurrency, renderer.Update)
+	finishErr := renderer.Finish()
+	if analysisErr != nil {
+		analysisErr = fmt.Errorf("evaluate approved golden fixture: %w", analysisErr)
 	}
-	renderer.Finish()
+	if finishErr != nil {
+		finishErr = fmt.Errorf("finish semantic progress: %w", finishErr)
+	}
+	if err := errors.Join(analysisErr, finishErr); err != nil {
+		return golden.Metrics{}, err
+	}
+
+	return metrics, nil
+}
+
+func printGoldenMetrics(tr i18n.Translator, metrics golden.Metrics) {
 	fmt.Println()
 	fmt.Println(tr.T("golden_evaluate_title"))
 	fields := make([]string, 0, len(metrics.Fields))
@@ -139,20 +178,24 @@ func runGoldenEvaluate(args []string) error {
 	sort.Strings(fields)
 	for _, field := range fields {
 		stat := metrics.Fields[field]
-		fmt.Printf("  %s: %d/%d (%.1f%%)\n", localizedGoldenField(tr, field), stat.Correct, stat.Samples, stat.Accuracy*100)
+		fmt.Printf("  %s: %d/%d (%.1f%%)\n", localizedGoldenField(tr, field), stat.Correct, stat.Samples, stat.Accuracy*percentageScale)
 	}
-	fmt.Printf("  %s: %d/%d %s, %s %.1f%%, %s %.1f%%, %s %.1f%%\n", tr.T("golden_field_prevention"), metrics.Prevention.ExactMatches, metrics.Prevention.Samples, tr.T("golden_exact"), tr.T("golden_precision"), metrics.Prevention.Precision*100, tr.T("golden_recall"), metrics.Prevention.Recall*100, tr.T("golden_f1"), metrics.Prevention.F1*100)
+	fmt.Printf("  %s: %d/%d %s, %s %.1f%%, %s %.1f%%, %s %.1f%%\n", tr.T("golden_field_prevention"), metrics.Prevention.ExactMatches, metrics.Prevention.Samples, tr.T("golden_exact"), tr.T("golden_precision"), metrics.Prevention.Precision*percentageScale, tr.T("golden_recall"), metrics.Prevention.Recall*percentageScale, tr.T("golden_f1"), metrics.Prevention.F1*percentageScale)
 	for _, line := range metrics.Confusions {
 		fmt.Printf("  %s: %s %s -> %s %s (%d %s)\n", localizedGoldenField(tr, line.Field), tr.T("golden_expected"), localizedGoldenValue(tr, line.Field, line.Expected), tr.T("golden_predicted"), localizedGoldenValue(tr, line.Field, line.Predicted), line.Count, tr.T("golden_samples"))
 	}
+}
+
+func validateGoldenMetrics(metrics golden.Metrics) error {
 	for _, stat := range metrics.Fields {
 		if stat.Correct != stat.Samples {
-			return fmt.Errorf("golden regression: approved expectations were not met")
+			return errGoldenExpectedMismatch
 		}
 	}
 	if metrics.Prevention.Samples > 0 && metrics.Prevention.ExactMatches != metrics.Prevention.Samples {
-		return fmt.Errorf("golden regression: prevention expectations were not met")
+		return errGoldenPreventionMismatch
 	}
+
 	return nil
 }
 
@@ -179,6 +222,7 @@ func localizedGoldenValue(tr i18n.Translator, field, value string) string {
 				parts[i] = tr.PreventionMechanism(part)
 			}
 		}
+
 		return strings.Join(parts, ", ")
 	default:
 		return value
@@ -190,5 +234,6 @@ func localizedGoldenField(tr i18n.Translator, field string) string {
 	if key, ok := keys[field]; ok {
 		return tr.T(key)
 	}
+
 	return field
 }

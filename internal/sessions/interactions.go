@@ -3,10 +3,18 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
-	"os"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/axcherednikov/codex-insights/internal/fileio"
+)
+
+const (
+	scannerInitialCapacity = 64 * 1024
+	interactionMaxLineSize = 16 * 1024 * 1024
 )
 
 type Interaction struct {
@@ -51,113 +59,142 @@ type interactionContentItem struct {
 	Text string `json:"text"`
 }
 
+type interactionParser struct {
+	before  time.Time
+	result  []Interaction
+	current *Interaction
+}
+
 func ParseInteractions(path string, before time.Time) ([]Interaction, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+	parser := interactionParser{before: before}
+	if err := fileio.Read(path, parser.scan); err != nil {
+		return nil, fmt.Errorf("parse interactions from %q: %w", path, err)
 	}
-	defer f.Close()
 
-	var (
-		result  []Interaction
-		current *Interaction
-	)
+	return parser.finish(), nil
+}
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-
+func (p *interactionParser) scan(reader io.Reader) error {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, scannerInitialCapacity), interactionMaxLineSize)
 	for scanner.Scan() {
-		var record interactionRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			continue
-		}
-
-		if !before.IsZero() && record.Timestamp != "" {
-			recordTime, err := time.Parse(time.RFC3339Nano, record.Timestamp)
-			if err == nil && recordTime.After(before) {
-				continue
-			}
-		}
-
-		if record.Type == "response_item" {
-			var item interactionResponseItem
-			if err := json.Unmarshal(record.Payload, &item); err != nil {
-				continue
-			}
-			if current != nil &&
-				item.Type == "message" &&
-				item.Role == "user" &&
-				item.Metadata.TurnID == current.TurnID &&
-				containsInteractionKind(item.Metadata.ContentItemKinds, "user.text") &&
-				current.Prompt == "" {
-				current.Prompt = interactionInputText(item.Content)
-			}
-			continue
-		}
-
-		if record.Type != "event_msg" {
-			continue
-		}
-
-		var payload interactionPayload
-		if err := json.Unmarshal(record.Payload, &payload); err != nil {
-			continue
-		}
-
-		switch payload.Type {
-		case "task_started":
-			if current != nil {
-				if current.TurnID != "" && current.TurnID == payload.TurnID {
-					continue
-				}
-				result = append(result, *current)
-			}
-			current = &Interaction{
-				TurnID:    payload.TurnID,
-				StartedAt: record.Timestamp,
-				Status:    "incomplete",
-			}
-
-		case "user_message":
-			if current != nil && current.Prompt == "" {
-				current.Prompt = payload.Message
-			}
-
-		case "item_completed":
-			if current != nil && payload.TurnID == current.TurnID && payload.Item.Type == "UserMessage" {
-				if prompt := interactionText(payload.Item.Content); prompt != "" {
-					// This event identifies the actual user message for the turn and
-					// is authoritative when a rollout also contains injected context.
-					current.Prompt = prompt
-				}
-			}
-
-		case "task_complete":
-			if current != nil {
-				current.Status = "complete"
-				current.Answer = payload.LastAgentMessage
-				result = append(result, *current)
-				current = nil
-			}
-
-		case "turn_aborted":
-			if current != nil {
-				current.Status = "aborted"
-				result = append(result, *current)
-				current = nil
-			}
-		}
+		p.parseLine(scanner.Bytes())
 	}
-
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return fmt.Errorf("scan interaction records: %w", err)
 	}
 
-	if current != nil {
-		result = append(result, *current)
+	return nil
+}
+
+func (p *interactionParser) parseLine(line []byte) {
+	var record interactionRecord
+	if json.Unmarshal(line, &record) != nil || !p.isWithinCutoff(record.Timestamp) {
+		return
 	}
 
-	return result, nil
+	switch record.Type {
+	case "response_item":
+		p.parseResponse(record.Payload)
+	case "event_msg":
+		p.parseEvent(record.Timestamp, record.Payload)
+	}
+}
+
+func (p *interactionParser) isWithinCutoff(timestamp string) bool {
+	if p.before.IsZero() || timestamp == "" {
+		return true
+	}
+
+	recordTime, err := time.Parse(time.RFC3339Nano, timestamp)
+
+	return err != nil || !recordTime.After(p.before)
+}
+
+func (p *interactionParser) parseResponse(payload json.RawMessage) {
+	var item interactionResponseItem
+	if json.Unmarshal(payload, &item) != nil || p.current == nil || item.Type != "message" || item.Role != "user" {
+		return
+	}
+	if item.Metadata.TurnID != p.current.TurnID || p.current.Prompt != "" ||
+		!containsInteractionKind(item.Metadata.ContentItemKinds, "user.text") {
+		return
+	}
+
+	p.current.Prompt = interactionInputText(item.Content)
+}
+
+func (p *interactionParser) parseEvent(timestamp string, data json.RawMessage) {
+	var payload interactionPayload
+	if json.Unmarshal(data, &payload) != nil {
+		return
+	}
+
+	switch payload.Type {
+	case "task_started":
+		p.start(payload.TurnID, timestamp)
+	case "user_message":
+		p.setLegacyPrompt(payload.Message)
+	case "item_completed":
+		p.setCompletedPrompt(payload)
+	case "task_complete":
+		p.complete(payload)
+	case "turn_aborted":
+		p.abort()
+	}
+}
+
+func (p *interactionParser) start(turnID, timestamp string) {
+	if p.current != nil {
+		if p.current.TurnID == turnID && turnID != "" {
+			return
+		}
+		p.result = append(p.result, *p.current)
+	}
+	p.current = &Interaction{TurnID: turnID, StartedAt: timestamp, Status: "incomplete"}
+}
+
+func (p *interactionParser) setLegacyPrompt(prompt string) {
+	if p.current != nil && p.current.Prompt == "" {
+		p.current.Prompt = prompt
+	}
+}
+
+func (p *interactionParser) setCompletedPrompt(payload interactionPayload) {
+	if p.current == nil || payload.TurnID != p.current.TurnID || payload.Item.Type != "UserMessage" {
+		return
+	}
+	if prompt := interactionText(payload.Item.Content); prompt != "" {
+		// Completed user text is authoritative over injected rollout context.
+		p.current.Prompt = prompt
+	}
+}
+
+func (p *interactionParser) complete(payload interactionPayload) {
+	if p.current == nil {
+		return
+	}
+	p.current.Status = "complete"
+	p.current.Answer = payload.LastAgentMessage
+	p.result = append(p.result, *p.current)
+	p.current = nil
+}
+
+func (p *interactionParser) abort() {
+	if p.current == nil {
+		return
+	}
+	p.current.Status = "aborted"
+	p.result = append(p.result, *p.current)
+	p.current = nil
+}
+
+func (p *interactionParser) finish() []Interaction {
+	if p.current != nil {
+		p.result = append(p.result, *p.current)
+	}
+
+	return p.result
 }
 
 func containsInteractionKind(kinds []string, expected string) bool {
@@ -171,6 +208,7 @@ func interactionInputText(content []interactionContentItem) string {
 			prompt.WriteString(item.Text)
 		}
 	}
+
 	return prompt.String()
 }
 
@@ -180,5 +218,6 @@ func interactionText(content []interactionContentItem) string {
 			return item.Text
 		}
 	}
+
 	return ""
 }

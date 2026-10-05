@@ -10,6 +10,8 @@ import (
 	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
 
+const historicalCalibrationMinimumParts = 8
+
 func deterministicSnapshot(interactions []sessions.Interaction, turns []sessions.Turn, followups []sessions.Followup) golden.DeterministicSnapshot {
 	result := golden.DeterministicSnapshot{Tasks: len(interactions), Followups: len(followups)}
 	for _, item := range interactions {
@@ -35,9 +37,10 @@ func deterministicSnapshot(interactions []sessions.Interaction, turns []sessions
 	}
 	if completedTurns > 0 {
 		result.AverageTokens = float64(tokens) / float64(completedTurns)
-		result.AverageSeconds = float64(duration) / float64(completedTurns) / 1000
+		result.AverageSeconds = float64(duration) / float64(completedTurns) / secondsPerMillisecond
 		result.AverageTools = float64(tools) / float64(completedTurns)
 	}
+
 	return result
 }
 
@@ -74,7 +77,7 @@ func printHistoricalGuard(tr i18n.Translator, options golden.HistoricalOptions, 
 func localizeHistoricalText(tr i18n.Translator, line string) string {
 	if strings.Contains(line, "follow-up and semantic metrics require calibration") {
 		parts := strings.Split(line, " ")
-		if len(parts) >= 8 {
+		if len(parts) >= historicalCalibrationMinimumParts {
 			return fmt.Sprintf(tr.T("historical_calibration_warning"), parts[3], parts[6])
 		}
 	}
@@ -90,5 +93,6 @@ func localizeHistoricalText(tr i18n.Translator, line string) string {
 	} {
 		line = strings.ReplaceAll(line, replacement.from, replacement.to)
 	}
+
 	return line
 }

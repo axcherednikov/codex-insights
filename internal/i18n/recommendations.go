@@ -1,139 +1,189 @@
 package i18n
 
+func recommendationTextTranslation(key string) (string, string, bool) {
+	if english, russian, found := lookupRecommendationProgress(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupRecommendationCounts(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupRecommendationHeadings(key); found {
+		return english, russian, true
+	}
+
+	return "", "", false
+}
+
+func lookupRecommendationProgress(key string) (string, string, bool) {
+	switch key {
+	case "running_prevention":
+		return "Running prevention analysis...", "Анализируем способы снижения корректировок...", true
+	case "running_validation":
+		return "Running validation gap analysis...", "Анализируем недостающие проверки...", true
+	case "running_prompt_quality":
+		return "Analyzing prompt quality...", "Анализируем качество постановок...", true
+	case "running_agents_rules":
+		return "Analyzing AGENTS.md recommendations...", "Формируем рекомендации для AGENTS.md...", true
+	case "running_skill_candidates":
+		return "Finding reusable Skill candidates...", "Ищем переиспользуемые Skill...", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupRecommendationCounts(key string) (string, string, bool) {
+	switch key {
+	case "prevention_cache_hits":
+		return "Prevention cache hits", "Способов предотвращения из кеша", true
+	case "prevention_new":
+		return "Prevention newly evaluated", "Новых оценок предотвращения", true
+	case "validation_cache_hits":
+		return "Validation cache hits", "Проверок из кеша", true
+	case "validation_new":
+		return "Validation newly evaluated", "Новых оценок проверок", true
+	case "prompt_quality_cache_hits":
+		return "Prompt quality cache hits", "Постановок из кеша", true
+	case "prompt_quality_new":
+		return "Prompt quality newly evaluated", "Новых оценок постановок", true
+	case "agents_rules_cache_hits":
+		return "AGENTS.md cache hits", "Правил AGENTS.md из кеша", true
+	case "agents_rules_new":
+		return "AGENTS.md newly evaluated", "Новых оценок правил AGENTS.md", true
+	case "skill_candidates_cache_hits":
+		return "Skill candidate cache hits", "Кандидатов Skill из кеша", true
+	case "skill_candidates_new":
+		return "Skill candidates newly evaluated", "Новых оценок кандидатов Skill", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupRecommendationHeadings(key string) (string, string, bool) {
+	switch key {
+	case "prompt_quality":
+		return "Prompt quality improvements", "Как улучшить постановку задачи", true
+	case "agents_recommendations":
+		return "Concrete AGENTS.md recommendations", "Конкретные рекомендации для AGENTS.md", true
+	case "skill_candidates":
+		return "Reusable Skill candidates", "Переиспользуемые кандидаты Skill", true
+	case "supporting_cases":
+		return "supporting cases", "подтверждающих случаев", true
+	case "usefulness":
+		return "Usefulness", "Польза", true
+	default:
+		return "", "", false
+	}
+}
+
 func (t Translator) PromptQualityIssue(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianPromptQualityIssues[value]; ok {
-			return translated
-		}
+	english, russian, found := promptQualityIssueTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func promptQualityIssueTranslation(key string) (string, string, bool) {
+	switch key {
+	case "ambiguous_request":
+		return "Ambiguous request", "Неоднозначная постановка", true
+	case "missing_acceptance":
+		return "Missing acceptance criteria", "Не заданы критерии готовности", true
+	case "missing_constraints":
+		return "Missing constraints", "Не заданы ограничения", true
+	case "missing_context":
+		return "Missing context", "Не хватает контекста", true
+	case "missing_scope":
+		return "Missing scope", "Не определены границы изменений", true
+	case "other":
+		return "Other", "Другое", true
+	case "wrong_assumption":
+		return "Wrong assumption", "Ошибочное предположение", true
+	default:
+		return "", "", false
 	}
-	if translated, ok := englishPromptQualityIssues[value]; ok {
-		return translated
-	}
-	return value
 }
 
 func (t Translator) AgentsRule(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianAgentsRules[value]; ok {
-			return translated
-		}
+	english, russian, found := agentsRuleTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func agentsRuleTranslation(key string) (string, string, bool) {
+	switch key {
+	case "avoid_scope_creep":
+		return "Keep changes within the requested scope.", "Не выходить за заявленные границы изменений.", true
+	case "avoid_unnecessary_complexity":
+		return "Keep the implementation no more complex than necessary.", "Выбирать достаточное и не более сложное решение.", true
+	case "follow_explicit_constraints":
+		return "Treat explicit requirements and limitations as binding.", "Считать явные требования и ограничения обязательными.", true
+	case "follow_requested_output_format":
+		return "Deliver the requested output format or artifact.", "Выдавать результат или артефакт в запрошенном формате.", true
+	case "inspect_existing_code_first":
+		return "Inspect relevant code and instructions before making changes.", "Перед изменениями изучать нужный код и инструкции.", true
+	case "other":
+		return "No recurring project rule identified.", "Устойчивое правило проекта не выявлено.", true
+	case "preserve_project_architecture":
+		return "Follow the project's existing architecture and conventions.", "Следовать существующей архитектуре и соглашениям проекта.", true
+	case "validate_before_completion":
+		return "Run the relevant checks and verify results before completion.", "Перед завершением запускать нужные проверки и проверять результат.", true
+	default:
+		return "", "", false
 	}
-	if translated, ok := englishAgentsRules[value]; ok {
-		return translated
-	}
-	return value
 }
 
 func (t Translator) SkillCandidate(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianSkillCandidates[value]; ok {
-			return translated
-		}
+	english, russian, found := skillCandidateTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func skillCandidateTranslation(key string) (string, string, bool) {
+	switch key {
+	case "bounded_architecture_review":
+		return "Bounded architecture review", "Ограниченное ревью архитектуры", true
+	case "implementation_prompt_file":
+		return "Implementation prompt file", "Файл промпта для реализации", true
+	case "verification_workflow":
+		return "Verification workflow", "Процесс проверки результата", true
+	default:
+		return "", "", false
 	}
-	if translated, ok := englishSkillCandidates[value]; ok {
-		return translated
-	}
-	return value
 }
 
 func (t Translator) SkillCandidatePurpose(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianSkillPurposes[value]; ok {
-			return translated
-		}
+	english, russian, found := skillCandidatePurposeTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func skillCandidatePurposeTranslation(key string) (string, string, bool) {
+	switch key {
+	case "bounded_architecture_review":
+		return "Review the relevant architecture within explicit boundaries before implementation.", "До реализации проверять нужную архитектуру в заданных границах.", true
+	case "implementation_prompt_file":
+		return "Turn a request into a self-contained execution contract for an implementation worker.", "Превращать задачу в самодостаточный контракт для исполнителя.", true
+	case "verification_workflow":
+		return "Run a repeatable set of checks and verify the delivered result.", "Повторяемо запускать проверки и подтверждать готовность результата.", true
+	default:
+		return "", "", false
 	}
-	if translated, ok := englishSkillPurposes[value]; ok {
-		return translated
-	}
-	return value
 }
 
 func (t Translator) SkillCandidateUsefulness(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianSkillUsefulness[value]; ok {
-			return translated
-		}
+	english, russian, found := skillCandidateUsefulnessTranslation(value)
+
+	return localized(t.Language, english, russian, found, value)
+}
+
+func skillCandidateUsefulnessTranslation(key string) (string, string, bool) {
+	switch key {
+	case "bounded_architecture_review":
+		return "Reduces architecture drift and unnecessary redesign.", "Снижает риск расхождения с архитектурой и лишней переделки.", true
+	case "implementation_prompt_file":
+		return "Reduces omissions when handing implementation work to another agent.", "Снижает риск пропусков при передаче реализации исполнителю.", true
+	case "verification_workflow":
+		return "Catches incomplete or incorrect results before handoff.", "Помогает обнаружить неполный или неверный результат до передачи.", true
+	default:
+		return "", "", false
 	}
-	if translated, ok := englishSkillUsefulness[value]; ok {
-		return translated
-	}
-	return value
-}
-
-var englishPromptQualityIssues = map[string]string{
-	"missing_constraints": "Missing constraints",
-	"missing_context":     "Missing context",
-	"ambiguous_request":   "Ambiguous request",
-	"missing_acceptance":  "Missing acceptance criteria",
-	"missing_scope":       "Missing scope",
-	"wrong_assumption":    "Wrong assumption",
-	"other":               "Other",
-}
-
-var russianPromptQualityIssues = map[string]string{
-	"missing_constraints": "Не заданы ограничения",
-	"missing_context":     "Не хватает контекста",
-	"ambiguous_request":   "Неоднозначная постановка",
-	"missing_acceptance":  "Не заданы критерии готовности",
-	"missing_scope":       "Не определены границы изменений",
-	"wrong_assumption":    "Ошибочное предположение",
-	"other":               "Другое",
-}
-
-var englishAgentsRules = map[string]string{
-	"avoid_unnecessary_complexity":   "Keep the implementation no more complex than necessary.",
-	"preserve_project_architecture":  "Follow the project's existing architecture and conventions.",
-	"follow_explicit_constraints":    "Treat explicit requirements and limitations as binding.",
-	"avoid_scope_creep":              "Keep changes within the requested scope.",
-	"inspect_existing_code_first":    "Inspect relevant code and instructions before making changes.",
-	"validate_before_completion":     "Run the relevant checks and verify results before completion.",
-	"follow_requested_output_format": "Deliver the requested output format or artifact.",
-	"other":                          "No recurring project rule identified.",
-}
-
-var russianAgentsRules = map[string]string{
-	"avoid_unnecessary_complexity":   "Выбирать достаточное и не более сложное решение.",
-	"preserve_project_architecture":  "Следовать существующей архитектуре и соглашениям проекта.",
-	"follow_explicit_constraints":    "Считать явные требования и ограничения обязательными.",
-	"avoid_scope_creep":              "Не выходить за заявленные границы изменений.",
-	"inspect_existing_code_first":    "Перед изменениями изучать нужный код и инструкции.",
-	"validate_before_completion":     "Перед завершением запускать нужные проверки и проверять результат.",
-	"follow_requested_output_format": "Выдавать результат или артефакт в запрошенном формате.",
-	"other":                          "Устойчивое правило проекта не выявлено.",
-}
-
-var englishSkillCandidates = map[string]string{
-	"implementation_prompt_file":  "Implementation prompt file",
-	"bounded_architecture_review": "Bounded architecture review",
-	"verification_workflow":       "Verification workflow",
-}
-
-var russianSkillCandidates = map[string]string{
-	"implementation_prompt_file":  "Файл промпта для реализации",
-	"bounded_architecture_review": "Ограниченное ревью архитектуры",
-	"verification_workflow":       "Процесс проверки результата",
-}
-
-var englishSkillPurposes = map[string]string{
-	"implementation_prompt_file":  "Turn a request into a self-contained execution contract for an implementation worker.",
-	"bounded_architecture_review": "Review the relevant architecture within explicit boundaries before implementation.",
-	"verification_workflow":       "Run a repeatable set of checks and verify the delivered result.",
-}
-
-var russianSkillPurposes = map[string]string{
-	"implementation_prompt_file":  "Превращать задачу в самодостаточный контракт для исполнителя.",
-	"bounded_architecture_review": "До реализации проверять нужную архитектуру в заданных границах.",
-	"verification_workflow":       "Повторяемо запускать проверки и подтверждать готовность результата.",
-}
-
-var englishSkillUsefulness = map[string]string{
-	"implementation_prompt_file":  "Reduces omissions when handing implementation work to another agent.",
-	"bounded_architecture_review": "Reduces architecture drift and unnecessary redesign.",
-	"verification_workflow":       "Catches incomplete or incorrect results before handoff.",
-}
-
-var russianSkillUsefulness = map[string]string{
-	"implementation_prompt_file":  "Снижает риск пропусков при передаче реализации исполнителю.",
-	"bounded_architecture_review": "Снижает риск расхождения с архитектурой и лишней переделки.",
-	"verification_workflow":       "Помогает обнаружить неполный или неверный результат до передачи.",
 }

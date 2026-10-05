@@ -1,8 +1,10 @@
 package sessions
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,5 +32,40 @@ func TestParseTurnsDetectsSubagentsOnlyFromActiveToolCalls(t *testing.T) {
 	}
 	if turns[1].UsesSubagents || turns[1].ToolCalls != 1 {
 		t.Fatalf("second turn subagent/tool counts = %v/%d", turns[1].UsesSubagents, turns[1].ToolCalls)
+	}
+}
+
+func TestParseTurnsReturnsOversizedScanError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := bytes.Repeat([]byte("x"), turnMaxLineSize+1)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ParseTurns(path, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("ParseTurns error = %v, want scanner token size failure", err)
+	}
+}
+
+func TestParseTurnsPreservesCumulativeTokenResetAndIncompleteTail(t *testing.T) {
+	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":40}}}}
+{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":55}}}}
+{"type":"event_msg","payload":{"type":"task_complete","turn_id":"one"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":3}}}}
+{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two"}}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":8}}}}`
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	turns, err := ParseTurns(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 2 || turns[0].Tokens != 15 || turns[1].Tokens != 5 || turns[1].Status != "incomplete" {
+		t.Fatalf("ParseTurns() = %#v, want completed delta 15 and incomplete reset delta 5", turns)
 	}
 }

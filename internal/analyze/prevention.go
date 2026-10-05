@@ -13,6 +13,8 @@ import (
 
 const preventionCacheVersion = "prevention-v1"
 
+const preventionBatchSize = 10
+
 type PreventionResult struct {
 	PreviousTurnID string   `json:"previous_turn_id"`
 	Applicable     []string `json:"applicable"`
@@ -39,13 +41,13 @@ type PreventionAnalyzer struct {
 func NewPreventionAnalyzer() (PreventionAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return PreventionAnalyzer{}, err
+		return PreventionAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
 
 	return PreventionAnalyzer{
 		runner:    judge.New(),
 		cache:     store,
-		batchSize: 10,
+		batchSize: preventionBatchSize,
 	}, nil
 }
 
@@ -73,27 +75,64 @@ func (a PreventionAnalyzer) Analyze(
 		Results: make([]PreventionResult, 0, len(cases)),
 	}
 
-	resultsByTurn := make(
-		map[string]PreventionResult,
-		len(cases),
-	)
+	resultsByTurn, pending, cacheHits := a.selectPending(cases)
+	analysis.CacheHits = cacheHits
 
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return PreventionAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
+
+	analysis.Results, err = assemblePreventionAnalysis(cases, resultsByTurn)
+	if err != nil {
+		return PreventionAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a PreventionAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]PreventionResult, []sessions.Followup, int) {
+	resultsByTurn := make(map[string]PreventionResult, len(cases))
 	pending := make([]sessions.Followup, 0, len(cases))
-
+	cacheHits := 0
 	for _, item := range cases {
 		var cached PreventionResult
-
-		if a.cache != nil &&
-			a.cache.Get(preventionCacheKey(item), &cached) &&
-			cached.PreviousTurnID == item.PreviousTurnID {
-
+		if a.cache != nil && a.cache.Get(preventionCacheKey(item), &cached) && cached.PreviousTurnID == item.PreviousTurnID {
 			resultsByTurn[item.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
-
 		pending = append(pending, item)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assemblePreventionAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]PreventionResult,
+) ([]PreventionResult, error) {
+	results := make([]PreventionResult, 0, len(cases))
+	for _, item := range cases {
+		result, ok := resultsByTurn[item.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingPreventionResult, item.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a PreventionAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]PreventionResult,
+) (int, error) {
+	var evaluated int
 
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
@@ -105,7 +144,7 @@ func (a PreventionAnalyzer) Analyze(
 
 		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return PreventionAnalysis{}, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"analyze prevention batch %d-%d: %w",
 				start,
 				end,
@@ -113,7 +152,7 @@ func (a PreventionAnalyzer) Analyze(
 			)
 		}
 
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 
 		for _, result := range results {
 			resultsByTurn[result.PreviousTurnID] = result
@@ -130,29 +169,17 @@ func (a PreventionAnalyzer) Analyze(
 					preventionCacheKey(item),
 					result,
 				); err != nil {
-					return PreventionAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 
 			if err := a.cache.Save(); err != nil {
-				return PreventionAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
 
-	for _, item := range cases {
-		result, ok := resultsByTurn[item.PreviousTurnID]
-		if !ok {
-			return PreventionAnalysis{}, fmt.Errorf(
-				"missing prevention result for turn %q",
-				item.PreviousTurnID,
-			)
-		}
-
-		analysis.Results = append(analysis.Results, result)
-	}
-
-	return analysis, nil
+	return evaluated, nil
 }
 
 func (a PreventionAnalyzer) analyzeBatch(
@@ -174,10 +201,8 @@ func (a PreventionAnalyzer) analyzeBatch(
 		})
 	}
 
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal prevention cases: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 
 	prompt := `Identify prevention mechanisms for each steering case.
 
@@ -217,7 +242,7 @@ Records:
 		preventionSchema(),
 		&response,
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 
 	results, err := normalizeAndValidatePreventionResults(
@@ -254,17 +279,11 @@ func normalizeAndValidatePreventionResults(
 
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return nil, fmt.Errorf(
-				"judge returned unexpected turn id %q",
-				result.PreviousTurnID,
-			)
+			return nil, fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return nil, fmt.Errorf(
-				"judge returned duplicate turn id %q",
-				result.PreviousTurnID,
-			)
+			return nil, fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 
 		seen[result.PreviousTurnID] = struct{}{}
@@ -274,10 +293,7 @@ func normalizeAndValidatePreventionResults(
 
 		for _, mechanism := range result.Applicable {
 			if _, ok := allowed[mechanism]; !ok {
-				return nil, fmt.Errorf(
-					"judge returned unsupported prevention mechanism %q",
-					mechanism,
-				)
+				return nil, fmt.Errorf("%w %q", errUnsupportedPrevention, mechanism)
 			}
 
 			if _, duplicate := used[mechanism]; duplicate {
@@ -291,28 +307,18 @@ func normalizeAndValidatePreventionResults(
 		result.Applicable = unique
 
 		if result.NotPreventable && len(result.Applicable) > 0 {
-			return nil, fmt.Errorf(
-				"turn %q is marked not preventable but has applicable mechanisms",
-				result.PreviousTurnID,
-			)
+			return nil, fmt.Errorf("%w %q is marked not preventable but has applicable mechanisms", errNotPreventableHasMechanism, result.PreviousTurnID)
 		}
 
 		if !result.NotPreventable && len(result.Applicable) == 0 {
-			return nil, fmt.Errorf(
-				"turn %q has no prevention mechanism but is not marked not preventable",
-				result.PreviousTurnID,
-			)
+			return nil, fmt.Errorf("%w %q has no prevention mechanism but is not marked not preventable", errPreventableWithoutMechanism, result.PreviousTurnID)
 		}
 
 		normalized = append(normalized, result)
 	}
 
 	if len(seen) != len(expected) {
-		return nil, fmt.Errorf(
-			"judge returned %d results, expected %d",
-			len(seen),
-			len(expected),
-		)
+		return nil, fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
 
 	return normalized, nil

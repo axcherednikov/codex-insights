@@ -1,37 +1,30 @@
 package i18n
 
 func (t Translator) ValidationType(value string) string {
-	if t.Language == Russian {
-		if translated, ok := russianValidationTypes[value]; ok {
-			return translated
-		}
-	}
+	english, russian, found := validationTypeTranslation(value)
 
-	if translated, ok := englishValidationTypes[value]; ok {
-		return translated
-	}
-
-	return value
+	return localized(t.Language, english, russian, found, value)
 }
 
-var englishValidationTypes = map[string]string{
-	"runtime_smoke_check": "Runtime smoke check",
-	"deployment_check":    "Deployment check",
-	"diff_review":         "Diff review",
-	"static_analysis":     "Static analysis",
-	"output_validation":   "Output validation",
-	"tests":               "Automated tests",
-	"data_validation":     "Data validation",
-	"other":               "Other",
-}
-
-var russianValidationTypes = map[string]string{
-	"runtime_smoke_check": "Проверка реального запуска",
-	"deployment_check":    "Проверка деплоя",
-	"diff_review":         "Проверка итогового diff",
-	"static_analysis":     "Статический анализ",
-	"output_validation":   "Проверка результата",
-	"tests":               "Автоматические тесты",
-	"data_validation":     "Проверка данных",
-	"other":               "Другое",
+func validationTypeTranslation(key string) (string, string, bool) {
+	switch key {
+	case "data_validation":
+		return "Data validation", "Проверка данных", true
+	case "deployment_check":
+		return "Deployment check", "Проверка деплоя", true
+	case "diff_review":
+		return "Diff review", "Проверка итогового diff", true
+	case "other":
+		return "Other", "Другое", true
+	case "output_validation":
+		return "Output validation", "Проверка результата", true
+	case "runtime_smoke_check":
+		return "Runtime smoke check", "Проверка реального запуска", true
+	case "static_analysis":
+		return "Static analysis", "Статический анализ", true
+	case "tests":
+		return "Automated tests", "Автоматические тесты", true
+	default:
+		return "", "", false
+	}
 }

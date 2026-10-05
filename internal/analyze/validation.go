@@ -13,6 +13,8 @@ import (
 
 const validationCacheVersion = "validation-v1"
 
+const validationBatchSize = 10
+
 type ValidationResult struct {
 	PreviousTurnID string  `json:"previous_turn_id"`
 	ValidationType string  `json:"validation_type"`
@@ -38,13 +40,13 @@ type ValidationAnalyzer struct {
 func NewValidationAnalyzer() (ValidationAnalyzer, error) {
 	store, err := analysiscache.NewDefault()
 	if err != nil {
-		return ValidationAnalyzer{}, err
+		return ValidationAnalyzer{}, fmt.Errorf("open analysis cache: %w", err)
 	}
 
 	return ValidationAnalyzer{
 		runner:    judge.New(),
 		cache:     store,
-		batchSize: 10,
+		batchSize: validationBatchSize,
 	}, nil
 }
 
@@ -72,27 +74,64 @@ func (a ValidationAnalyzer) Analyze(
 		Results: make([]ValidationResult, 0, len(cases)),
 	}
 
-	resultsByTurn := make(
-		map[string]ValidationResult,
-		len(cases),
-	)
+	resultsByTurn, pending, cacheHits := a.selectPending(cases)
+	analysis.CacheHits = cacheHits
 
+	var err error
+	analysis.Evaluated, err = a.evaluatePending(pending, resultsByTurn)
+	if err != nil {
+		return ValidationAnalysis{}, fmt.Errorf("run analysis: %w", err)
+	}
+
+	analysis.Results, err = assembleValidationAnalysis(cases, resultsByTurn)
+	if err != nil {
+		return ValidationAnalysis{}, err
+	}
+
+	return analysis, nil
+}
+
+func (a ValidationAnalyzer) selectPending(
+	cases []sessions.Followup,
+) (map[string]ValidationResult, []sessions.Followup, int) {
+	resultsByTurn := make(map[string]ValidationResult, len(cases))
 	pending := make([]sessions.Followup, 0, len(cases))
-
+	cacheHits := 0
 	for _, item := range cases {
 		var cached ValidationResult
-
-		if a.cache != nil &&
-			a.cache.Get(validationCacheKey(item), &cached) &&
-			cached.PreviousTurnID == item.PreviousTurnID {
-
+		if a.cache != nil && a.cache.Get(validationCacheKey(item), &cached) && cached.PreviousTurnID == item.PreviousTurnID {
 			resultsByTurn[item.PreviousTurnID] = cached
-			analysis.CacheHits++
+			cacheHits++
+
 			continue
 		}
-
 		pending = append(pending, item)
 	}
+
+	return resultsByTurn, pending, cacheHits
+}
+
+func assembleValidationAnalysis(
+	cases []sessions.Followup,
+	resultsByTurn map[string]ValidationResult,
+) ([]ValidationResult, error) {
+	results := make([]ValidationResult, 0, len(cases))
+	for _, item := range cases {
+		result, ok := resultsByTurn[item.PreviousTurnID]
+		if !ok {
+			return nil, fmt.Errorf("%w %q", errMissingValidationResult, item.PreviousTurnID)
+		}
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (a ValidationAnalyzer) evaluatePending(
+	pending []sessions.Followup,
+	resultsByTurn map[string]ValidationResult,
+) (int, error) {
+	var evaluated int
 
 	for start := 0; start < len(pending); start += a.batchSize {
 		end := start + a.batchSize
@@ -104,7 +143,7 @@ func (a ValidationAnalyzer) Analyze(
 
 		results, err := analyzeBatchWithSplit(batch, a.analyzeBatch)
 		if err != nil {
-			return ValidationAnalysis{}, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"analyze validation batch %d-%d: %w",
 				start,
 				end,
@@ -112,7 +151,7 @@ func (a ValidationAnalyzer) Analyze(
 			)
 		}
 
-		analysis.Evaluated += len(batch)
+		evaluated += len(batch)
 
 		for _, result := range results {
 			resultsByTurn[result.PreviousTurnID] = result
@@ -129,29 +168,17 @@ func (a ValidationAnalyzer) Analyze(
 					validationCacheKey(item),
 					result,
 				); err != nil {
-					return ValidationAnalysis{}, err
+					return 0, fmt.Errorf("persist analysis cache: %w", err)
 				}
 			}
 
 			if err := a.cache.Save(); err != nil {
-				return ValidationAnalysis{}, err
+				return 0, fmt.Errorf("persist analysis cache: %w", err)
 			}
 		}
 	}
 
-	for _, item := range cases {
-		result, ok := resultsByTurn[item.PreviousTurnID]
-		if !ok {
-			return ValidationAnalysis{}, fmt.Errorf(
-				"missing validation result for turn %q",
-				item.PreviousTurnID,
-			)
-		}
-
-		analysis.Results = append(analysis.Results, result)
-	}
-
-	return analysis, nil
+	return evaluated, nil
 }
 
 func (a ValidationAnalyzer) analyzeBatch(
@@ -173,10 +200,8 @@ func (a ValidationAnalyzer) analyzeBatch(
 		})
 	}
 
-	data, err := json.Marshal(records)
-	if err != nil {
-		return nil, fmt.Errorf("marshal validation cases: %w", err)
-	}
+	// The concrete record type contains only strings, so JSON marshaling cannot fail.
+	data, _ := json.Marshal(records)
 
 	prompt := `Determine the primary validation mechanism that most likely
 would have caught this failure before Codex declared completion.
@@ -206,7 +231,7 @@ Records:
 		validationSchema(),
 		&response,
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("run Judge classification: %w", err)
 	}
 
 	if err := validateValidationResults(
@@ -244,35 +269,22 @@ func validateValidationResults(
 
 	for _, result := range results {
 		if _, ok := expected[result.PreviousTurnID]; !ok {
-			return fmt.Errorf(
-				"judge returned unexpected turn id %q",
-				result.PreviousTurnID,
-			)
+			return fmt.Errorf("%w %q", errUnexpectedResultID, result.PreviousTurnID)
 		}
 
 		if _, duplicate := seen[result.PreviousTurnID]; duplicate {
-			return fmt.Errorf(
-				"judge returned duplicate turn id %q",
-				result.PreviousTurnID,
-			)
+			return fmt.Errorf("%w %q", errDuplicateResultID, result.PreviousTurnID)
 		}
 
 		if _, ok := allowed[result.ValidationType]; !ok {
-			return fmt.Errorf(
-				"judge returned unsupported validation type %q",
-				result.ValidationType,
-			)
+			return fmt.Errorf("%w %q", errUnsupportedValidationType, result.ValidationType)
 		}
 
 		seen[result.PreviousTurnID] = struct{}{}
 	}
 
 	if len(seen) != len(expected) {
-		return fmt.Errorf(
-			"judge returned %d results, expected %d",
-			len(seen),
-			len(expected),
-		)
+		return fmt.Errorf("%w %d results, expected %d", errJudgeResultCount, len(seen), len(expected))
 	}
 
 	return nil

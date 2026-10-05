@@ -1,9 +1,12 @@
 package sessions
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,6 +142,71 @@ func TestParseInteractionsPreservesAbortAndCutoffStates(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseInteractions() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseInteractionsSkipsMalformedAndReadsUnterminatedFinalRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := "malformed record\n" + `{"timestamp":"2026-09-16T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"last"}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ParseInteractions(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Interaction{{TurnID: "last", StartedAt: "2026-09-16T10:00:00Z", Status: "incomplete"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseInteractions() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseInteractionsReturnsOversizedScanError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	content := bytes.Repeat([]byte("x"), interactionMaxLineSize+1)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ParseInteractions(path, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("ParseInteractions error = %v, want scanner token size failure", err)
+	}
+}
+
+func TestSessionReadersPreserveSelectedSymlinkAndMissingFileErrors(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(target, []byte(`{"timestamp":"2026-09-16T10:00:00Z","type":"session_meta","payload":{"id":"selected"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "selected.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := ReadMeta(link)
+	if err != nil || meta.ID != "selected" {
+		t.Fatalf("ReadMeta(selected symlink) = %#v, %v", meta, err)
+	}
+
+	_, err = ParseTurns(filepath.Join(t.TempDir(), "missing"), time.Time{})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ParseTurns missing error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestFindRolloutsWrapsTraversalFailure(t *testing.T) {
+	_, err := FindRollouts(filepath.Join(t.TempDir(), "missing"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("FindRollouts error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestIsInsightsJudgeSessionReadsMarkerRecord(t *testing.T) {
+	path := writeInteractionFixture(t, `{"type":"event_msg","payload":{"type":"user_message","message":"`+JudgeMarker+`"}}`)
+	found, err := IsInsightsJudgeSession(path)
+	if err != nil || !found {
+		t.Fatalf("IsInsightsJudgeSession() = %v, %v", found, err)
 	}
 }
 
