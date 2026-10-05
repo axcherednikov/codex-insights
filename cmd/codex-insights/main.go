@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const defaultReportLanguage = "en"
+
 var version = "dev"
 
 func main() {

@@ -14,7 +14,8 @@ skills.
 
 - Fast, local-only usage summary with `quick`.
 - Deeper Judge-backed analysis with actionable recommendations.
-- English and Russian reports, selected automatically or with `--lang`.
+- English reports by default, with Russian or locale-based selection available
+  through `--lang`.
 - Configurable analysis windows and session locations.
 - Local semantic cache that stores labels rather than raw conversations.
 - Privacy-conscious golden fixture export and regression evaluation.
@@ -26,9 +27,10 @@ and other sensitive information.
 
 - `quick` reads session files locally and does not send conversation content to
   a model.
-- `analyze` sends selected task prompts, final answers, and follow-up messages
-  to the Judge configured by this project through `codex exec`. Judge runs use
-  `--ephemeral`, so the Codex CLI does not persist their session rollout files.
+- `analyze` sends bounded excerpts of selected task prompts, final answers, and
+  follow-up messages to the Judge configured by this project through
+  `codex exec`. Judge runs use `--ephemeral`, so the Codex CLI does not persist
+  their session rollout files.
 - `golden export` writes minimized, automatically redacted data locally and
   does not call the Judge. Automatic redaction is not a guarantee of secrecy;
   review every fixture before sharing or committing it.
@@ -206,7 +208,7 @@ Common options:
 | `--days` | `30` | Number of days to analyze; `0` means all history. |
 | `--before` | now | Analyze state before an RFC3339 timestamp. |
 | `--sessions` | `~/.codex/sessions` | Session history directory. |
-| `--lang` | `auto` | Report language: `auto`, `en`, or `ru`. |
+| `--lang` | `en` | Report language: `auto`, `en`, or `ru`. |
 
 ### `analyze`
 

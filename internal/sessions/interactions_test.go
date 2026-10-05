@@ -3,6 +3,7 @@ package sessions
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -89,13 +90,55 @@ func TestParseInteractionsPreservesLegacyUserMessage(t *testing.T) {
 	}
 }
 
-func TestBuildFollowupsSkipsIncompletePrompt(t *testing.T) {
-	followups := BuildFollowups([]Interaction{
-		{TurnID: "first", Status: "complete", Prompt: "first request", Answer: "first answer"},
-		{TurnID: "second", Status: "complete", Prompt: "", Answer: "second answer"},
-	})
-	if len(followups) != 0 {
-		t.Fatalf("BuildFollowups = %#v", followups)
+func TestParseInteractionsRetainsIncompleteTurnBetweenCompletedTurns(t *testing.T) {
+	path := writeInteractionFixture(t, `
+{"timestamp":"2026-09-16T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"a"}}
+{"timestamp":"2026-09-16T10:00:01Z","type":"event_msg","payload":{"type":"user_message","turn_id":"a","message":"prompt A"}}
+{"timestamp":"2026-09-16T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"a","last_agent_message":"answer A"}}
+{"timestamp":"2026-09-16T10:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"b"}}
+{"timestamp":"2026-09-16T10:01:01Z","type":"event_msg","payload":{"type":"user_message","turn_id":"b","message":"prompt B"}}
+{"timestamp":"2026-09-16T10:01:02Z","type":"event_msg","payload":{"type":"task_started","turn_id":"b"}}
+{"timestamp":"2026-09-16T10:02:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"c"}}
+{"timestamp":"2026-09-16T10:02:01Z","type":"event_msg","payload":{"type":"user_message","turn_id":"c","message":"prompt C"}}
+{"timestamp":"2026-09-16T10:02:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"c","last_agent_message":"answer C"}}
+`)
+	got, err := ParseInteractions(path, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Interaction{
+		{TurnID: "a", StartedAt: "2026-09-16T10:00:00Z", Status: "complete", Prompt: "prompt A", Answer: "answer A"},
+		{TurnID: "b", StartedAt: "2026-09-16T10:01:00Z", Status: "incomplete", Prompt: "prompt B"},
+		{TurnID: "c", StartedAt: "2026-09-16T10:02:00Z", Status: "complete", Prompt: "prompt C", Answer: "answer C"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseInteractions() = %#v, want %#v", got, want)
+	}
+	if followups := BuildFollowups(got); len(followups) != 0 {
+		t.Fatalf("followups crossed incomplete B: %#v", followups)
+	}
+}
+
+func TestParseInteractionsPreservesAbortAndCutoffStates(t *testing.T) {
+	path := writeInteractionFixture(t, `
+{"timestamp":"2026-09-16T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"aborted"}}
+{"timestamp":"2026-09-16T10:00:01Z","type":"event_msg","payload":{"type":"user_message","turn_id":"aborted","message":"aborted prompt"}}
+{"timestamp":"2026-09-16T10:00:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"aborted"}}
+{"timestamp":"2026-09-16T10:01:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"cutoff"}}
+{"timestamp":"2026-09-16T10:01:01Z","type":"event_msg","payload":{"type":"user_message","turn_id":"cutoff","message":"cutoff prompt"}}
+{"timestamp":"2026-09-16T10:01:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"cutoff","last_agent_message":"after cutoff"}}
+`)
+	before, _ := time.Parse(time.RFC3339, "2026-09-16T10:01:02Z")
+	got, err := ParseInteractions(path, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Interaction{
+		{TurnID: "aborted", StartedAt: "2026-09-16T10:00:00Z", Status: "aborted", Prompt: "aborted prompt"},
+		{TurnID: "cutoff", StartedAt: "2026-09-16T10:01:00Z", Status: "incomplete", Prompt: "cutoff prompt"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseInteractions() = %#v, want %#v", got, want)
 	}
 }
 

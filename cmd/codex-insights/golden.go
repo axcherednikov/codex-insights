@@ -52,7 +52,7 @@ func runGoldenExport(args []string) error {
 	legacy := fs.String("legacy-exclude-originator", "", "exclude historical sessions by originator")
 	limit := fs.Int("limit", 50, "maximum candidate cases (1-500)")
 	output := fs.String("output", "", "required output fixture path")
-	lang := fs.String("lang", "auto", "report language: auto, en, ru")
+	lang := fs.String("lang", defaultReportLanguage, "report language: auto, en, ru")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func runGoldenEvaluate(args []string) error {
 	fs := flag.NewFlagSet("golden evaluate", flag.ContinueOnError)
 	fixturePath := fs.String("fixture", "", "required approved fixture path")
 	concurrency := fs.Int("concurrency", analyze.SemanticDefaultWorkers, "number of semantic Judge workers (1-32)")
-	lang := fs.String("lang", "auto", "report language: auto, en, ru")
+	lang := fs.String("lang", defaultReportLanguage, "report language: auto, en, ru")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

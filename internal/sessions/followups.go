@@ -10,24 +10,18 @@ type Followup struct {
 }
 
 func BuildFollowups(interactions []Interaction) []Followup {
-	completed := make([]Interaction, 0, len(interactions))
-
-	for _, interaction := range interactions {
-		if interaction.Status == "complete" {
-			completed = append(completed, interaction)
-		}
-	}
-
-	if len(completed) < 2 {
+	if len(interactions) < 2 {
 		return nil
 	}
 
-	result := make([]Followup, 0, len(completed)-1)
+	result := make([]Followup, 0, len(interactions)-1)
 
-	for i := 1; i < len(completed); i++ {
-		previous := completed[i-1]
-		current := completed[i]
-		if strings.TrimSpace(current.Prompt) == "" {
+	for i := 1; i < len(interactions); i++ {
+		previous := interactions[i-1]
+		current := interactions[i]
+		if previous.Status != "complete" ||
+			current.Status != "complete" ||
+			strings.TrimSpace(current.Prompt) == "" {
 			continue
 		}
 

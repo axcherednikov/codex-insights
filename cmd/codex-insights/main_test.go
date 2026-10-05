@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
 func TestVersionLineIncludesConfiguredVersion(t *testing.T) {
@@ -16,6 +18,18 @@ func TestVersionLineIncludesConfiguredVersion(t *testing.T) {
 	}
 	if strings.Contains(versionLine(), "v0.1.0") {
 		t.Fatal("release version unexpectedly gained a second v prefix")
+	}
+}
+
+func TestDefaultReportLanguageIsEnglish(t *testing.T) {
+	t.Setenv("LC_ALL", "ru_RU.UTF-8")
+
+	translator, err := i18n.New(defaultReportLanguage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if translator.Language != i18n.English {
+		t.Fatalf("default report language = %q, want %q", translator.Language, i18n.English)
 	}
 }
 

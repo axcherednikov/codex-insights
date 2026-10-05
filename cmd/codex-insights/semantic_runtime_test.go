@@ -20,7 +20,7 @@ type disclosureCheckingRunner struct {
 }
 
 func (r *disclosureCheckingRunner) Run(string, any, any) error {
-	r.seen = strings.Contains(r.output.String(), "Selected task prompts")
+	r.seen = strings.Contains(r.output.String(), "Bounded excerpts of selected task prompts")
 	return errors.New("permission denied")
 }
 
@@ -90,7 +90,7 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 		coldRenderer.Update(analyze.SemanticProgress{TotalRecords: 100, CompletedRecords: completed, CacheHits: 2, ConfiguredWorkers: 6, Elapsed: time.Second})
 	}
 	coldRenderer.Finish()
-	if !strings.Contains(cold.String(), "Selected task prompts") || !strings.Contains(cold.String(), "100% (100/100)") {
+	if !strings.Contains(cold.String(), tr.T("semantic_privacy")) || !strings.Contains(cold.String(), "100% (100/100)") {
 		t.Fatalf("cold disclosure/progress missing: %q", cold.String())
 	}
 	if lines := strings.Count(cold.String(), "Semantic analysis:"); lines > 12 {
@@ -109,7 +109,7 @@ func TestSemanticProgressSuppressesWarmRunsAndBoundsNonTTYOutput(t *testing.T) {
 	ruRenderer.Update(analyze.SemanticProgress{TotalRecords: 2, ConfiguredWorkers: 2})
 	ruRenderer.Update(analyze.SemanticProgress{TotalRecords: 2, CompletedRecords: 2, CacheHits: 1, ConfiguredWorkers: 2, Elapsed: time.Second})
 	ruText := russian.String()
-	if !strings.Contains(ruText, "Выбранные постановки задач") || !strings.Contains(ruText, "Семантический анализ") {
+	if !strings.Contains(ruText, ru.T("semantic_privacy")) || !strings.Contains(ruText, "Семантический анализ") {
 		t.Fatalf("Russian cold progress was not localized: %q", ruText)
 	}
 	for _, internal := range []string{"steering", "implementation_error", "cache hits"} {

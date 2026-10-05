@@ -180,7 +180,7 @@ func TestEvaluateMetricsJoinsResultsByCaseID(t *testing.T) {
 
 func TestHistoricalGuardExactAndToleranceBoundaries(t *testing.T) {
 	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
-	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}
+	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}
 	actual := DeterministicSnapshot{Tasks: 1046, Complete: 1023, Aborted: 20, Incomplete: 3, Followups: 930, AverageTokens: 1652761, AverageSeconds: 258.3, AverageTools: 15.6}
 	semantic := SemanticSnapshot{Samples: 930, SteeringRate: 14.8, Cohorts: map[string]CohortRate{"refactor": {Samples: 10, SteeringRate: 30}, "architecture": {Samples: 10, SteeringRate: 20.6}}}
 	if result := CheckHistoricalGuard(opts, actual, semantic); !result.Pass() {
@@ -202,20 +202,20 @@ func TestHistoricalGuardExactAndToleranceBoundaries(t *testing.T) {
 
 func TestHistoricalGuardDeterministicMismatchAndSelection(t *testing.T) {
 	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
-	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}
+	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}
 	actual := DeterministicSnapshot{Tasks: 1, Complete: 1}
 	result := CheckHistoricalGuard(opts, actual, SemanticSnapshot{})
 	if !result.Fail() || len(result.DeterministicMismatches) != 8 {
 		t.Fatalf("mismatch result = %#v", result)
 	}
-	if CheckHistoricalGuard(HistoricalOptions{Days: 1, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}, actual, SemanticSnapshot{}).Applicable {
+	if CheckHistoricalGuard(HistoricalOptions{Days: 1, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}, actual, SemanticSnapshot{}).Applicable {
 		t.Fatal("non-snapshot invocation selected")
 	}
 }
 
 func TestHistoricalGuardReportsEachDeterministicField(t *testing.T) {
 	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
-	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}
+	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}
 	base := DeterministicSnapshot{Tasks: 1046, Complete: 1023, Aborted: 20, Incomplete: 3, Followups: 930, AverageTokens: 1652761, AverageSeconds: 258.3, AverageTools: 15.6}
 	cases := []struct {
 		name   string
@@ -240,7 +240,7 @@ func TestHistoricalGuardReportsEachDeterministicField(t *testing.T) {
 
 func TestHistoricalGuardWarningOrdering(t *testing.T) {
 	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
-	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}
+	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}
 	semantic := SemanticSnapshot{Samples: 930, SteeringRate: 0, Cohorts: map[string]CohortRate{"architecture": {Samples: 20, SteeringRate: 0}, "refactor": {Samples: 20, SteeringRate: 100}}}
 	result := CheckHistoricalGuard(opts, DeterministicSnapshot{Tasks: 1046, Complete: 1023, Aborted: 20, Incomplete: 3, Followups: 930, AverageTokens: 1652761, AverageSeconds: 258.3, AverageTools: 15.6}, semantic)
 	if len(result.SemanticWarnings) != 3 {
@@ -255,12 +255,38 @@ func TestHistoricalGuardWarningOrdering(t *testing.T) {
 
 func TestHistoricalGuardWarnsOnMissingOrSmallReferenceCohortAndSampleCount(t *testing.T) {
 	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
-	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator}
+	opts := HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}
 	result := CheckHistoricalGuard(opts, DeterministicSnapshot{}, SemanticSnapshot{Samples: 929, SteeringRate: 14.8, Cohorts: map[string]CohortRate{"refactor": {Samples: 9, SteeringRate: 30}}})
 	if len(result.SemanticWarnings) != 3 {
 		t.Fatalf("expected sample, small refactor, and missing architecture warnings: %#v", result.SemanticWarnings)
 	}
 	if !strings.Contains(strings.Join(result.SemanticWarnings, "\n"), "sample count") || !strings.Contains(strings.Join(result.SemanticWarnings, "\n"), "architecture cohort missing") || !strings.Contains(strings.Join(result.SemanticWarnings, "\n"), "refactor cohort has 9") {
 		t.Fatalf("missing cohort/sample warnings: %#v", result.SemanticWarnings)
+	}
+}
+
+func TestHistoricalGuardRequiresMethodologyCalibration(t *testing.T) {
+	before, _ := time.Parse(time.RFC3339, HistoricalBefore)
+	actual := DeterministicSnapshot{Tasks: 1046, Complete: 1023, Aborted: 20, Incomplete: 3, Followups: 930, AverageTokens: 1652761, AverageSeconds: 258.3, AverageTools: 15.6}
+	semantic := SemanticSnapshot{Samples: 930, SteeringRate: 14.8, Cohorts: map[string]CohortRate{"refactor": {Samples: 10, SteeringRate: 30}, "architecture": {Samples: 10, SteeringRate: 20.6}}}
+	for _, methodology := range []string{"semantic-v2", "", "future-methodology"} {
+		t.Run(methodology, func(t *testing.T) {
+			result := CheckHistoricalGuard(HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: methodology}, actual, semantic)
+			if result.Pass() || len(result.SemanticWarnings) != 1 {
+				t.Fatalf("guard = %#v", result)
+			}
+			if !strings.Contains(result.SemanticWarnings[0], "semantic-v1") || !strings.Contains(result.SemanticWarnings[0], "calibration") {
+				t.Fatalf("warning = %#v", result.SemanticWarnings)
+			}
+		})
+	}
+	legacy := CheckHistoricalGuard(HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: HistoricalMethodology}, actual, semantic)
+	if !legacy.Pass() {
+		t.Fatalf("legacy exact guard = %#v", legacy)
+	}
+	observed := DeterministicSnapshot{Tasks: 434, Complete: 423, Aborted: 10, Incomplete: 1, Followups: 373, AverageTokens: 1572035, AverageSeconds: 218.1, AverageTools: 14.1}
+	mismatch := CheckHistoricalGuard(HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: HistoricalLegacyOriginator, MethodologyVersion: "semantic-v2"}, observed, SemanticSnapshot{})
+	if !mismatch.Fail() || len(mismatch.DeterministicMismatches) != 7 {
+		t.Fatalf("different-source result = %#v", mismatch)
 	}
 }

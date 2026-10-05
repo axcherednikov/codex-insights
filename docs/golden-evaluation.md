@@ -20,7 +20,11 @@ shown as a warning; they do not block evaluation.
 The fixture records methodology, prompt, and schema versions independently.
 Bump methodology when the classification definitions or evaluation procedure
 changes; bump prompt when Judge instructions change; bump schema when the
-wire/result shape changes. All three participate in production cache keys.
+wire/result shape changes. Current production versions are `semantic-v2`,
+`semantic-judge-v2`, and `semantic-schema-v2`. The prompt version advances
+independently, so the new prompt causes a cold production semantic cache while
+leaving methodology and result schema versions unchanged. All three participate
+in production cache keys.
 Model and reasoning effort also intentionally invalidate cache entries;
 language does not, because labels are language-independent. The persistent
 cache stores labels and confidence values, never raw conversation text. A cold
@@ -36,10 +40,24 @@ The historical guard applies only to the documented snapshot invocation:
 `--before 2026-08-26T14:56:26Z --days 0 --legacy-exclude-originator
 codex_exec`. It fails on deterministic aggregate mismatches (1046 tasks,
 1023/20/3 statuses, 930 follow-ups, displayed averages 1652761 tokens, 258.3
-seconds, and 15.6 tools). Semantic drift is a visible warning: overall
-steering uses a tight +/-1.5 percentage-point tolerance; refactor and
-architecture cohorts use +/-8 points with at least 10 observations. These
-choices surface known historical drift while allowing ordinary Judge noise.
+seconds, and 15.6 tools). The follow-up and semantic reference values belong
+to `semantic-v1`. The current CLI reports calibration-required warnings for
+follow-up and semantic metrics under `semantic-v2` (and unknown methodologies),
+even when observed values happen to equal the historical values. It continues
+to check tasks, statuses, and averages strictly. Only an explicitly selected
+`semantic-v1` run compares the historical follow-up count and semantic rates;
+overall steering uses +/-1.5 percentage points, and refactor and architecture
+cohorts use +/-8 points with at least 10 observations. A differing local
+history source still fails strict unaffected fields; the historical figures
+are not replaced with local observations.
+
+Semantic input bounds each prompt, follow-up prompt, and previous answer to
+24 KiB. Oversized text keeps roughly half from the beginning and half from the
+end around a truncation marker, and omits the middle. Relevant evidence may be
+lost. Synthetic long-input tests verify serialization, UTF-8 integrity, cues,
+markers, and byte limits through the fake Judge seam. They verify input
+integrity only; they do not establish classifier quality. Real long-case
+quality remains unverified until a human-approved golden sample is evaluated.
 
 Aggregates are associations, not causal effects. Cohort comparisons can be
 confounded by task difficulty and routing, and subagent-use comparisons have
