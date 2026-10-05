@@ -142,7 +142,7 @@ var english = map[string]string{
 	"steering_by_task_type":             "Steering by task type",
 	"followups":                         "follow-ups",
 	"nothing_to_analyze":                "Nothing to analyze.",
-	"semantic_privacy":                  "Selected task prompts, final answers, and follow-ups will be sent to the configured Judge; the persistent semantic cache stores labels, not raw conversations.",
+	"semantic_privacy":                  "Bounded excerpts of selected task prompts, final answers, and follow-ups will be sent to the configured Judge; the persistent semantic cache stores labels, not raw conversations.",
 	"codex_cli_missing":                 "Codex CLI was not found in PATH. Install it from https://developers.openai.com/codex/cli, then run \"codex\" once to sign in.",
 	"semantic_progress":                 "Semantic analysis",
 	"semantic_workers":                  "workers",
@@ -207,6 +207,7 @@ var english = map[string]string{
 	"historical_fail":                   "FAIL",
 	"historical_deterministic_mismatch": "deterministic mismatch",
 	"historical_semantic_warning":       "semantic tolerance warning",
+	"historical_calibration_warning":    "Calibration required: historical reference uses %s; current methodology is %s. Follow-up and semantic metrics are uncalibrated.",
 }
 
 var russian = map[string]string{
@@ -252,7 +253,7 @@ var russian = map[string]string{
 	"steering_by_task_type":             "Корректировки по типам задач",
 	"followups":                         "последующих реплик",
 	"nothing_to_analyze":                "Нет данных для анализа.",
-	"semantic_privacy":                  "Выбранные постановки задач, финальные ответы и последующие реплики будут отправлены настроенному оценщику; постоянный семантический кеш хранит метки, а не исходные диалоги.",
+	"semantic_privacy":                  "Ограниченные по размеру фрагменты выбранных постановок задач, финальных ответов и последующих реплик будут отправлены настроенному оценщику; постоянный семантический кеш хранит метки, а не исходные диалоги.",
 	"codex_cli_missing":                 "Codex CLI не найден в PATH. Установите его по инструкции https://developers.openai.com/codex/cli, затем один раз запустите \"codex\" и войдите в аккаунт.",
 	"semantic_progress":                 "Семантический анализ",
 	"semantic_workers":                  "воркеры",
@@ -317,6 +318,7 @@ var russian = map[string]string{
 	"historical_fail":                   "ОШИБКА",
 	"historical_deterministic_mismatch": "расхождение детерминированных данных",
 	"historical_semantic_warning":       "предупреждение о допуске семантики",
+	"historical_calibration_warning":    "Требуется калибровка: исторический эталон использует %s; текущая методология — %s. Метрики продолжений и семантики не откалиброваны.",
 }
 
 var englishTaskTypes = map[string]string{

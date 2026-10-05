@@ -42,6 +42,9 @@ func deterministicSnapshot(interactions []sessions.Interaction, turns []sessions
 }
 
 func printHistoricalGuard(tr i18n.Translator, options golden.HistoricalOptions, interactions []sessions.Interaction, turns []sessions.Turn, followups []sessions.Followup, semantic []analyze.SemanticResult) {
+	if options.MethodologyVersion == "" {
+		options.MethodologyVersion = analyze.SemanticMethodologyVersion
+	}
 	guard := golden.CheckHistoricalGuard(options, deterministicSnapshot(interactions, turns, followups), golden.SemanticSnapshotFromResults(followups, semantic))
 	if !guard.Applicable {
 		return
@@ -69,6 +72,12 @@ func printHistoricalGuard(tr i18n.Translator, options golden.HistoricalOptions, 
 }
 
 func localizeHistoricalText(tr i18n.Translator, line string) string {
+	if strings.Contains(line, "follow-up and semantic metrics require calibration") {
+		parts := strings.Split(line, " ")
+		if len(parts) >= 8 {
+			return fmt.Sprintf(tr.T("historical_calibration_warning"), parts[3], parts[6])
+		}
+	}
 	if tr.Language != i18n.Russian {
 		return line
 	}

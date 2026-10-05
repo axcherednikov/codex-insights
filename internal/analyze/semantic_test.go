@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
 	"github.com/axcherednikov/codex-insights/internal/sessions"
@@ -26,6 +28,11 @@ type semanticFakeRunner struct {
 	forcedError        error
 	invalidTurnID      string
 	failSingletonID    string
+	inputTooLargeAbove int
+	maxPromptBytes     int
+	maxPromptSeen      int
+	inputTooLargeCalls int
+	batchSizes         []int
 	lastPrompt         string
 	delay              time.Duration
 }
@@ -60,6 +67,20 @@ func (f *semanticFakeRunner) Run(prompt string, schema any, target any) error {
 	}
 	if err := jsonUnmarshal([]byte(records), &ids); err != nil {
 		return err
+	}
+	f.mu.Lock()
+	f.batchSizes = append(f.batchSizes, len(ids))
+	if len(prompt) > f.maxPromptSeen {
+		f.maxPromptSeen = len(prompt)
+	}
+	tooManyRecords := f.inputTooLargeAbove > 0 && len(ids) > f.inputTooLargeAbove
+	tooManyBytes := f.maxPromptBytes > 0 && len(prompt) > f.maxPromptBytes
+	if tooManyRecords || tooManyBytes {
+		f.inputTooLargeCalls++
+	}
+	f.mu.Unlock()
+	if tooManyRecords || tooManyBytes {
+		return fmt.Errorf("provider rejected request: %w", errors.New("input_too_large: input exceeds the maximum length"))
 	}
 	containsInvalid := false
 	for _, item := range ids {
@@ -291,6 +312,28 @@ func TestSemanticJudgeRequiresConfidenceWithApplicableLabels(t *testing.T) {
 	}
 }
 
+func TestSemanticPromptRequiresPreventionConfidenceForMechanisms(t *testing.T) {
+	prompt, err := buildSemanticPrompt(semanticInputs(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const requirement = "When prevention_mechanisms is non-empty, prevention_confidence must be a number; when it is empty, prevention_confidence must be null."
+	if !strings.Contains(prompt, requirement) {
+		t.Fatalf("semantic prompt does not state prevention confidence contract: %q", requirement)
+	}
+}
+
+func TestSemanticPromptRequiresEmptySteeringFieldsForNonSteeringFollowups(t *testing.T) {
+	prompt, err := buildSemanticPrompt(semanticInputs(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const requirement = "For follow-up labels other than steering, set steering_reason, steering_reason_confidence, prevention_confidence, prompt_issue, prompt_issue_confidence, agents_rule, agents_rule_confidence, skill_candidate, skill_confidence, validation_type, and validation_confidence to null; set prevention_mechanisms to [] and not_preventable to false."
+	if !strings.Contains(prompt, requirement) {
+		t.Fatalf("semantic prompt does not state non-steering field contract: %q", requirement)
+	}
+}
+
 func TestSemanticEngineSplitsRetriesAndPreservesInputOrder(t *testing.T) {
 	runner := &semanticFakeRunner{failLarge: true}
 	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 2, BatchSize: 5, MaxRetries: 0})
@@ -315,6 +358,153 @@ func TestSemanticEngineSplitsRetriesAndPreservesInputOrder(t *testing.T) {
 	}
 	if runner.calls != 5 {
 		t.Fatalf("calls = %d, want initial plus 2 children and their singleton split calls", runner.calls)
+	}
+}
+
+func TestSemanticEnginePlansBatchesWithinPromptBudget(t *testing.T) {
+	runner := &semanticFakeRunner{maxPromptBytes: semanticMaxBatchBytes}
+	inputs := semanticInputs(SemanticDefaultBatchSize)
+	for i := range inputs {
+		inputs[i].Prompt = strings.Repeat("<", semanticMaxTextBytes)
+	}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: SemanticDefaultBatchSize, MaxRetries: 0})
+
+	analysis, err := engine.Analyze(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.inputTooLargeCalls != 0 {
+		t.Fatalf("oversized Judge calls = %d, want 0", runner.inputTooLargeCalls)
+	}
+	if runner.maxPromptSeen > semanticMaxBatchBytes {
+		t.Fatalf("largest prompt = %d bytes, budget = %d", runner.maxPromptSeen, semanticMaxBatchBytes)
+	}
+	if runner.calls < 2 || analysis.Stats.EvaluatedRecords != len(inputs) {
+		t.Fatalf("calls=%d stats=%+v", runner.calls, analysis.Stats)
+	}
+}
+
+func TestSemanticEngineSplitsUnexpectedInputTooLargeWithoutRetry(t *testing.T) {
+	runner := &semanticFakeRunner{inputTooLargeAbove: 2}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 4, MaxRetries: 2, RetryBackoff: func(int) time.Duration { return 0 }})
+
+	analysis, err := engine.Analyze(semanticInputs(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.batchSizes, []int{4, 2, 2}) {
+		t.Fatalf("batch sizes = %v, want [4 2 2]", runner.batchSizes)
+	}
+	if runner.calls != 3 || runner.inputTooLargeCalls != 1 {
+		t.Fatalf("calls=%d oversized=%d, want 3 calls and one split trigger", runner.calls, runner.inputTooLargeCalls)
+	}
+	if analysis.Stats.EvaluatedRecords != 4 || analysis.Stats.EvaluatedBatches != 2 {
+		t.Fatalf("stats = %+v", analysis.Stats)
+	}
+}
+
+func TestSemanticEngineSplitsProviderInputTooLargeBeforeTransientRetries(t *testing.T) {
+	runner := &semanticFakeRunner{inputTooLargeAbove: 2}
+	var progress []SemanticProgress
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 4, MaxRetries: 3, RetryBackoff: func(int) time.Duration { return 0 }, Progress: func(p SemanticProgress) { progress = append(progress, p) }})
+	store, err := analysiscache.New(t.TempDir() + "/cache.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.config.Cache = store
+	analysis, err := engine.Analyze(semanticInputs(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runner.batchSizes, []int{4, 2, 2}) || runner.calls != 3 {
+		t.Fatalf("batch sizes=%v calls=%d", runner.batchSizes, runner.calls)
+	}
+	if len(analysis.Results) != 4 || analysis.Stats.EvaluatedRecords != 4 || analysis.Stats.EvaluatedBatches != 2 || len(progress) != 3 {
+		t.Fatalf("analysis=%+v progress=%v", analysis.Stats, progress)
+	}
+	for _, input := range semanticInputs(4) {
+		var got SemanticResult
+		if !store.Get(semanticCacheKey(input, engine.config), &got) {
+			t.Fatalf("missing cached result for %s", input.TurnID)
+		}
+	}
+}
+
+func TestSemanticEngineProviderInputTooLargeSingletonIsTerminal(t *testing.T) {
+	runner := &semanticFakeRunner{forcedError: errors.New("wrapped provider input_too_large: input exceeds the maximum length")}
+	engine := NewSemanticEngine(SemanticConfig{Runner: runner, Workers: 1, BatchSize: 1, MaxRetries: 3, RetryBackoff: func(int) time.Duration { return 0 }})
+	_, err := engine.Analyze(semanticInputs(1))
+	if err == nil || !strings.Contains(err.Error(), `turn "turn-0" exceeds Judge input limit`) {
+		t.Fatalf("error = %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("calls=%d, want 1", runner.calls)
+	}
+}
+
+func TestSemanticPromptTruncatesOversizedRecordWithinBatchBudget(t *testing.T) {
+	text := "BEGIN-" + strings.Repeat("🙂<", semanticMaxTextBytes) + "-END"
+	truncated := truncateSemanticText(text)
+	if len(truncated) > semanticMaxTextBytes || !utf8.ValidString(truncated) {
+		t.Fatalf("truncated text has %d bytes or invalid UTF-8", len(truncated))
+	}
+	if !strings.HasPrefix(truncated, "BEGIN-") || !strings.HasSuffix(truncated, "-END") {
+		t.Fatal("truncation did not preserve the beginning and end")
+	}
+	worstCaseText := "BEGIN-" + strings.Repeat("<", semanticMaxTextBytes*2) + "-END"
+	prompt, err := buildSemanticPrompt([]SemanticInput{{
+		TurnID: "one",
+		Prompt: worstCaseText,
+		Followup: &SemanticFollowup{
+			TurnID:         "two",
+			Prompt:         worstCaseText,
+			PreviousAnswer: worstCaseText,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt) > semanticMaxBatchBytes {
+		t.Fatalf("single-record prompt = %d bytes, budget = %d", len(prompt), semanticMaxBatchBytes)
+	}
+	if strings.Count(prompt, semanticTruncationLabel) != 3 {
+		t.Fatalf("truncation markers = %d, want 3", strings.Count(prompt, semanticTruncationLabel))
+	}
+}
+
+func TestSemanticLongInputPreservesHeadAndTailCuesThroughRunner(t *testing.T) {
+	long := func(head, tail string) string {
+		return head + strings.Repeat(" нейтральный текст", 3000) + tail
+	}
+	inputs := []SemanticInput{{
+		TurnID:   "long-task",
+		Prompt:   long("Implement the bounded parser change. 🧭 ", " Preserve UTF-8; do not cross incomplete turns."),
+		Followup: &SemanticFollowup{TurnID: "long-next", Prompt: long("The first output missed the parser edge case. ", " Keep the source ordering and avoid duplicate turns."), PreviousAnswer: long("Completed the original implementation. ", " Do not claim classifier validation from synthetic labels.")},
+	}}
+	prompt, err := buildSemanticPrompt(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &semanticFakeRunner{}
+	response := semanticJudgeResponse{}
+	if err := runner.Run(prompt, semanticSchema(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(runner.lastPrompt) || len(runner.lastPrompt) > semanticMaxBatchBytes {
+		t.Fatalf("runner prompt bytes=%d validUTF8=%v", len(runner.lastPrompt), utf8.ValidString(runner.lastPrompt))
+	}
+	for _, cue := range []string{"Implement the bounded parser change.", "do not cross incomplete turns.", "first output missed the parser edge case.", "avoid duplicate turns.", "Completed the original implementation.", "Do not claim classifier validation from synthetic labels."} {
+		if !strings.Contains(runner.lastPrompt, cue) {
+			t.Errorf("runner prompt omitted cue %q", cue)
+		}
+	}
+	if got := strings.Count(runner.lastPrompt, semanticTruncationLabel); got != 3 {
+		t.Fatalf("truncation markers = %d, want prompt/followup/answer = 3", got)
+	}
+	for _, text := range []string{inputs[0].Prompt, inputs[0].Followup.Prompt, inputs[0].Followup.PreviousAnswer} {
+		if got := len(truncateSemanticText(text)); got > semanticMaxTextBytes {
+			t.Fatalf("truncated field bytes=%d, limit=%d", got, semanticMaxTextBytes)
+		}
 	}
 }
 
@@ -445,7 +635,8 @@ func TestSemanticEngineCacheIsLanguageIndependentAndInvalidatesVersions(t *testi
 		t.Fatal(err)
 	}
 	runner := &semanticFakeRunner{}
-	config := SemanticConfig{Runner: runner, Cache: store, Workers: 1, BatchSize: 2, MaxRetries: 0}
+	config := DefaultSemanticConfig()
+	config.Runner, config.Cache, config.Workers, config.BatchSize, config.MaxRetries = runner, store, 1, 2, 0
 	inputs := []SemanticInput{{TurnID: "one", Prompt: "private conversation text"}}
 	if _, err := NewSemanticEngine(config).Analyze(inputs); err != nil {
 		t.Fatal(err)
@@ -466,14 +657,17 @@ func TestSemanticEngineCacheIsLanguageIndependentAndInvalidatesVersions(t *testi
 	if runner.calls != 1 {
 		t.Fatalf("cache miss on repeat, calls=%d", runner.calls)
 	}
-	config.PromptVersion = "semantic-judge-v2"
+	if config.PromptVersion != "semantic-judge-v2" {
+		t.Fatalf("default prompt version = %q", config.PromptVersion)
+	}
+	config.PromptVersion = "semantic-judge-v1"
 	if _, err := NewSemanticEngine(config).Analyze(inputs); err != nil {
 		t.Fatal(err)
 	}
 	if runner.calls != 2 {
 		t.Fatalf("prompt version did not invalidate cache, calls=%d", runner.calls)
 	}
-	config.MethodologyVersion = "semantic-v2"
+	config.MethodologyVersion = "semantic-v3"
 	if _, err := NewSemanticEngine(config).Analyze(inputs); err != nil {
 		t.Fatal(err)
 	}

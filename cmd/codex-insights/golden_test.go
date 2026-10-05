@@ -1,9 +1,13 @@
 package main
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/axcherednikov/codex-insights/internal/golden"
 	"github.com/axcherednikov/codex-insights/internal/i18n"
 )
 
@@ -42,5 +46,39 @@ func TestGoldenRussianOutputTranslatesSemanticEnums(t *testing.T) {
 	}
 	if !strings.Contains(line, "Рефакторинг") || !strings.Contains(line, "Архитектура") {
 		t.Fatalf("historical cohort enum leaked: %s", line)
+	}
+}
+
+func TestHistoricalCalibrationWarningUsesCurrentMethodologyInEnglishAndRussian(t *testing.T) {
+	before := time.Date(2026, 8, 26, 14, 56, 26, 0, time.UTC)
+	for _, language := range []string{"en", "ru"} {
+		tr, err := i18n.New(language)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldStdout := os.Stdout
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.Stdout = writer
+		printHistoricalGuard(tr, golden.HistoricalOptions{Days: 0, Before: before, LegacyExcludeOriginator: golden.HistoricalLegacyOriginator}, nil, nil, nil, nil)
+		_ = writer.Close()
+		os.Stdout = oldStdout
+		output, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(output)
+		if !strings.Contains(text, "semantic-v1") || !strings.Contains(text, "semantic-v2") {
+			t.Fatalf("%s output lacks methodology diagnostic: %s", language, text)
+		}
+		if language == "ru" && !strings.Contains(text, "Требуется калибровка") {
+			t.Fatalf("Russian diagnostic not localized: %s", text)
+		}
+		if language == "en" && !strings.Contains(text, "Calibration required") {
+			t.Fatalf("English diagnostic missing: %s", text)
+		}
 	}
 }

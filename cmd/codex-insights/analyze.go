@@ -58,7 +58,7 @@ func runAnalyze(args []string) {
 
 	lang := fs.String(
 		"lang",
-		"auto",
+		defaultReportLanguage,
 		"report language: auto, en, ru",
 	)
 

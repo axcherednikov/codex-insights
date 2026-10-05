@@ -1,3 +1,4 @@
+
 # Codex Insights project memory
 
 Store reusable, evidence-backed project lessons here. Each lesson should state

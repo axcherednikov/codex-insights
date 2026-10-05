@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	analysiscache "github.com/axcherednikov/codex-insights/internal/cache"
 	"github.com/axcherednikov/codex-insights/internal/judge"
@@ -21,11 +22,16 @@ import (
 // methodology, prompt, or wire schema invalidates semantic cache entries
 // without requiring a disk-format migration.
 const (
-	SemanticMethodologyVersion = "semantic-v1"
-	SemanticPromptVersion      = "semantic-judge-v1"
+	SemanticMethodologyVersion = "semantic-v2"
+	SemanticPromptVersion      = "semantic-judge-v2"
 	SemanticSchemaVersion      = "semantic-schema-v2"
 	SemanticDefaultWorkers     = 6
 	SemanticDefaultBatchSize   = 20
+	semanticMaxBatchBytes      = 512 * 1024
+	semanticMaxTextBytes       = 24 * 1024
+	semanticTruncationLabel    = "[truncated for semantic analysis]"
+	semanticTruncationMarker   = "\n..." + semanticTruncationLabel + "...\n"
+	semanticRecordsPrefix      = "\n\nRecords:\n"
 )
 
 // SemanticFollowup is the language-independent input for a task's next turn.
@@ -497,6 +503,10 @@ func (e *SemanticEngine) Analyze(inputs []SemanticInput) (SemanticAnalysis, erro
 		}
 		pending = append(pending, semanticIndexedInput{index: i, input: input})
 	}
+	batches, err := planSemanticBatches(pending, e.config.BatchSize, semanticMaxBatchBytes)
+	if err != nil {
+		return SemanticAnalysis{}, err
+	}
 	var progressMu sync.Mutex
 	emitProgress := func(evaluatedRecords, evaluatedBatches int) {
 		callback := e.config.Progress
@@ -562,12 +572,11 @@ func (e *SemanticEngine) Analyze(inputs []SemanticInput) (SemanticAnalysis, erro
 		}()
 	}
 dispatch:
-	for start := 0; start < len(pending); start += e.config.BatchSize {
-		end := min(start+e.config.BatchSize, len(pending))
+	for _, batch := range batches {
 		select {
 		case <-ctx.Done():
 			break dispatch
-		case jobs <- pending[start:end]:
+		case jobs <- batch:
 		}
 	}
 	close(jobs)
@@ -580,6 +589,43 @@ dispatch:
 	stats.CompletedRecords = len(inputs)
 	stats.Elapsed = time.Since(started)
 	return SemanticAnalysis{Results: results, Stats: stats}, nil
+}
+
+func planSemanticBatches(items []semanticIndexedInput, maxRecords, maxBytes int) ([][]semanticIndexedInput, error) {
+	if maxRecords < 1 || maxBytes < 1 {
+		return nil, errors.New("semantic batch limits must be positive")
+	}
+	recordSizes := make([]int, len(items))
+	for i := range items {
+		record, err := marshalSemanticRecord(items[i].input)
+		if err != nil {
+			return nil, err
+		}
+		recordSizes[i] = len(record)
+	}
+	baseBytes := len(semanticJudgePrompt) + len(semanticRecordsPrefix) + 2
+	batches := make([][]semanticIndexedInput, 0, (len(items)+maxRecords-1)/maxRecords)
+	for start := 0; start < len(items); {
+		end := start
+		batchBytes := baseBytes
+		for end < len(items) && end-start < maxRecords {
+			recordBytes := recordSizes[end]
+			if end > start {
+				recordBytes++
+			}
+			if batchBytes+recordBytes > maxBytes {
+				break
+			}
+			batchBytes += recordBytes
+			end++
+		}
+		if end == start {
+			return nil, fmt.Errorf("semantic input turn %q exceeds internal prompt budget after truncation", items[start].input.TurnID)
+		}
+		batches = append(batches, items[start:end])
+		start = end
+	}
+	return batches, nil
 }
 
 func validateSemanticInputs(inputs []SemanticInput) error {
@@ -606,8 +652,7 @@ func (e *SemanticEngine) processSemanticBatch(batch []semanticIndexedInput, outp
 	}
 	results, err := e.runSemanticBatch(inputs)
 	if err != nil {
-		var invalid *semanticInvalidBatchError
-		if errors.As(err, &invalid) && len(batch) > 1 {
+		if isSplittableSemanticBatchError(err) && len(batch) > 1 {
 			middle := len(batch) / 2
 			if err := e.processSemanticBatch(batch[:middle], output, mu, evaluatedRecords, evaluatedBatches, emitProgress); err != nil {
 				return fmt.Errorf("semantic split left: %w", err)
@@ -616,6 +661,9 @@ func (e *SemanticEngine) processSemanticBatch(batch []semanticIndexedInput, outp
 				return fmt.Errorf("semantic split right: %w", err)
 			}
 			return nil
+		}
+		if isSemanticInputTooLargeError(err) {
+			return fmt.Errorf("semantic input turn %q exceeds Judge input limit after truncation: %w", batch[0].input.TurnID, err)
 		}
 		return err
 	}
@@ -648,19 +696,10 @@ func (e *SemanticEngine) processSemanticBatch(batch []semanticIndexedInput, outp
 }
 
 func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticResult, error) {
-	records := make([]map[string]any, len(inputs))
-	for i, input := range inputs {
-		record := map[string]any{"turn_id": input.TurnID, "prompt": input.Prompt}
-		if input.Followup != nil {
-			record["followup"] = map[string]string{"turn_id": input.Followup.TurnID, "prompt": input.Followup.Prompt, "previous_answer": input.Followup.PreviousAnswer}
-		}
-		records[i] = record
-	}
-	data, err := json.Marshal(records)
+	prompt, err := buildSemanticPrompt(inputs)
 	if err != nil {
-		return nil, fmt.Errorf("marshal semantic records: %w", err)
+		return nil, err
 	}
-	prompt := semanticJudgePrompt + "\n\nRecords:\n" + string(data)
 	var lastErr error
 	var firstValidationErr error
 	for attempt := 0; attempt <= e.config.MaxRetries; attempt++ {
@@ -670,6 +709,9 @@ func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticRes
 		var response semanticJudgeResponse
 		if err := e.config.Runner.Run(prompt, semanticSchema(), &response); err != nil {
 			lastErr = err
+			if isSemanticInputTooLargeError(err) {
+				return nil, err
+			}
 			if !isTransientSemanticError(err) || attempt == e.config.MaxRetries {
 				return nil, err
 			}
@@ -713,6 +755,70 @@ func (e *SemanticEngine) runSemanticBatch(inputs []SemanticInput) ([]SemanticRes
 		return results, nil
 	}
 	return nil, lastErr
+}
+
+func buildSemanticPrompt(inputs []SemanticInput) (string, error) {
+	var prompt strings.Builder
+	prompt.WriteString(semanticJudgePrompt)
+	prompt.WriteString(semanticRecordsPrefix)
+	prompt.WriteByte('[')
+	for i, input := range inputs {
+		record, err := marshalSemanticRecord(input)
+		if err != nil {
+			return "", err
+		}
+		if i > 0 {
+			prompt.WriteByte(',')
+		}
+		prompt.Write(record)
+	}
+	prompt.WriteByte(']')
+	return prompt.String(), nil
+}
+
+func marshalSemanticRecord(input SemanticInput) ([]byte, error) {
+	record := map[string]any{"turn_id": input.TurnID, "prompt": truncateSemanticText(input.Prompt)}
+	if input.Followup != nil {
+		record["followup"] = map[string]string{
+			"turn_id":         input.Followup.TurnID,
+			"prompt":          truncateSemanticText(input.Followup.Prompt),
+			"previous_answer": truncateSemanticText(input.Followup.PreviousAnswer),
+		}
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("marshal semantic record %q: %w", input.TurnID, err)
+	}
+	return data, nil
+}
+
+func truncateSemanticText(text string) string {
+	if len(text) <= semanticMaxTextBytes {
+		return text
+	}
+	contentBytes := semanticMaxTextBytes - len(semanticTruncationMarker)
+	headBytes := contentBytes / 2
+	tailBytes := contentBytes - headBytes
+	headEnd := headBytes
+	for headEnd > 0 && !utf8.RuneStart(text[headEnd]) {
+		headEnd--
+	}
+	tailStart := len(text) - tailBytes
+	for tailStart < len(text) && !utf8.RuneStart(text[tailStart]) {
+		tailStart++
+	}
+	return text[:headEnd] + semanticTruncationMarker + text[tailStart:]
+}
+
+func isSplittableSemanticBatchError(err error) bool {
+	var invalid *semanticInvalidBatchError
+	return errors.As(err, &invalid) || isSemanticInputTooLargeError(err)
+}
+
+func isSemanticInputTooLargeError(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "input_too_large") ||
+		strings.Contains(text, "input exceeds the maximum length")
 }
 
 func isTransientSemanticError(err error) bool {
@@ -896,7 +1002,7 @@ agents_md = a stable project-wide rule would likely prevent the mistake
 skill = a reusable workflow for this task type would likely prevent the mistake
 task_prompt = missing or ambiguous information in THIS request materially caused the mistake
 validation = an automated test, check, or review would likely catch the mistake before completion
-Prefer 0-2 mechanisms per case; more than 2 is exceptional. If none clearly qualify, use prevention_mechanisms=[] and not_preventable=true. Otherwise use not_preventable=false. Do not mark a case not preventable when mechanisms are present.
+Prefer 0-2 mechanisms per case; more than 2 is exceptional. If none clearly qualify, use prevention_mechanisms=[] and not_preventable=true. Otherwise use not_preventable=false. Do not mark a case not preventable when mechanisms are present. When prevention_mechanisms is non-empty, prevention_confidence must be a number; when it is empty, prevention_confidence must be null.
 
 Prompt issues (classify only when task_prompt applies; choose exactly one):
 missing_constraints = important requirements or limitations were not stated
@@ -935,7 +1041,7 @@ diff_review = review the produced code or diff for unintended changes, regressio
 data_validation = verify SQL, API responses, calculations, metrics, or actual data
 other = none of the above
 
-Every task with a non-empty prompt has task_type and task_confidence. If the task prompt is empty/unavailable, task_type and task_confidence must be null; do not use other as a substitute. A task with no follow-up must use empty/null follow-up fields. Follow-up classification remains fully required whenever a follow-up is supplied, including when the task prompt is unavailable. Non-steering follow-ups must use empty/null steering-only and prevention/follow-on fields. A steering follow-up must provide steering_reason and either one or more prevention mechanisms or not_preventable=true. Each optional follow-on classification and its confidence must be present exactly when its prevention mechanism applies. Return every supplied input ID exactly once, with no missing, duplicate, or unexpected IDs. Return no prose and do not use tools.`
+Every task with a non-empty prompt has task_type and task_confidence. If the task prompt is empty/unavailable, task_type and task_confidence must be null; do not use other as a substitute. A task with no follow-up must use empty/null follow-up fields. Follow-up classification remains fully required whenever a follow-up is supplied, including when the task prompt is unavailable. For follow-up labels other than steering, set steering_reason, steering_reason_confidence, prevention_confidence, prompt_issue, prompt_issue_confidence, agents_rule, agents_rule_confidence, skill_candidate, skill_confidence, validation_type, and validation_confidence to null; set prevention_mechanisms to [] and not_preventable to false. A steering follow-up must provide steering_reason and either one or more prevention mechanisms or not_preventable=true. Each optional follow-on classification and its confidence must be present exactly when its prevention mechanism applies. Return every supplied input ID exactly once, with no missing, duplicate, or unexpected IDs. Return no prose and do not use tools.`
 
 func semanticSchema() map[string]any {
 	numberOrNull := map[string]any{"type": []string{"number", "null"}}

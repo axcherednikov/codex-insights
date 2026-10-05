@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Default reports to English while retaining explicit `--lang auto` locale
+  detection and `--lang ru` Russian output.
+- Bound semantic Judge requests by serialized size, truncate exceptionally long
+  text fields, and split unexpected oversized batches instead of aborting the
+  full analysis.
+- Build follow-up pairs only from adjacent completed interactions so aborted
+  or incomplete tasks cannot create false semantic steering relationships.
+
 ### Security
 
 - Run Judge-backed analysis with `codex exec --ephemeral` so prompts, answers,

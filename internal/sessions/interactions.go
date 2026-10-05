@@ -106,6 +106,12 @@ func ParseInteractions(path string, before time.Time) ([]Interaction, error) {
 
 		switch payload.Type {
 		case "task_started":
+			if current != nil {
+				if current.TurnID != "" && current.TurnID == payload.TurnID {
+					continue
+				}
+				result = append(result, *current)
+			}
 			current = &Interaction{
 				TurnID:    payload.TurnID,
 				StartedAt: record.Timestamp,
