@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -170,6 +171,13 @@ func checkMode(t *testing.T, path string, want os.FileMode) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	wantDirectory := want == privateDirectoryMode
+	if info.IsDir() != wantDirectory {
+		t.Fatalf("path %q directory = %v, want %v", path, info.IsDir(), wantDirectory)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Fatalf("mode for %q = %04o, want %04o", path, got, want)
