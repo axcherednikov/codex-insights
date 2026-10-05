@@ -1,0 +1,210 @@
+{
+  "git_base_commit": "8d0782918ae68536317676fad41380c98763de8c",
+  "managed_roles": {
+    "api-analyst": {
+      "installed_sha256": "7e772115c4c575fefff89fb6bc210d74087490e0cdcb98551456faeba9da8e77",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "560355f61f7c1cf4765978063c9d174369223c6b3aa306373a064f8f8fe5e164",
+      "override_fields_sha256": {
+        "model": "c1ffe835cdc1eb3263891bbc4bcc609803f1e0c563f8903ea64d7c5145748b54",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "7e772115c4c575fefff89fb6bc210d74087490e0cdcb98551456faeba9da8e77"
+    },
+    "architect-agent": {
+      "installed_sha256": "74956082e75a3f51e1eccc4f50f60cf1a1801a6acba9eaa91f9f866249259c0c",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "886910510bd85be4b722823ab4350c8a951cf278c474f7430b6f472087bba02f",
+      "override_fields_sha256": {
+        "model": "c1ffe835cdc1eb3263891bbc4bcc609803f1e0c563f8903ea64d7c5145748b54",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "74956082e75a3f51e1eccc4f50f60cf1a1801a6acba9eaa91f9f866249259c0c"
+    },
+    "claim-verifier": {
+      "installed_sha256": "a968281a85346462c2d99c000cb577a1d5b9692ac2b89be6fc75bc5610f945c0",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "51aa53885d1ab33181ae502296af5f796018452692d4f6f90d1ed317137132a1",
+      "override_fields_sha256": {
+        "model": "c1ffe835cdc1eb3263891bbc4bcc609803f1e0c563f8903ea64d7c5145748b54",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "a968281a85346462c2d99c000cb577a1d5b9692ac2b89be6fc75bc5610f945c0"
+    },
+    "decision-agent": {
+      "installed_sha256": "a8d3d2a708f7d749ee1691eb0a319b9647cc0134c4d108bba16daa9357975e52",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "c89a0e72a1f73209e49c6401e492704abd33b1234774d25e58bc058a95ff1606",
+      "override_fields_sha256": {
+        "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
+        "model_reasoning_effort": "60d4c90eee5e731df8d3ef2891de541d2e755ff8ee9db358e26bdec49f6e0db9"
+      },
+      "template_sha256": "a8d3d2a708f7d749ee1691eb0a319b9647cc0134c4d108bba16daa9357975e52"
+    },
+    "doc-digest": {
+      "installed_sha256": "f4493a3160ab06e958d3bb5024cdf6d7df28ffa5bb5a800d4bcae434d2af62a4",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "944619fd2d987e9d8b3b164747b18a025ff53fa7c8da488be570f4a6369e59cd",
+      "override_fields_sha256": {
+        "model": "c4b5a917552265e5fafafe6cbd4330942045da42e40c70738fe20719b3c8b3d7",
+        "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
+      },
+      "template_sha256": "f4493a3160ab06e958d3bb5024cdf6d7df28ffa5bb5a800d4bcae434d2af62a4"
+    },
+    "executor-agent": {
+      "installed_sha256": "8ef9f18f1896f1da637626bfd37bd37ebd7897b01b6c6d6ebc1450bcd7622fa4",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions"
+      ],
+      "managed_fields_sha256": "5773c1003fa810f97582dded801d159b4c107621923e12e8f7191ef6e93a01b8",
+      "override_fields_sha256": {
+        "model": "c4b5a917552265e5fafafe6cbd4330942045da42e40c70738fe20719b3c8b3d7",
+        "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
+      },
+      "template_sha256": "8ef9f18f1896f1da637626bfd37bd37ebd7897b01b6c6d6ebc1450bcd7622fa4"
+    },
+    "gitlab-commenter": {
+      "installed_sha256": "71c8e87e8005ce93383ba6bdf44cdc9cc6b3299d1642091a0f5a2cc093f48319",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions"
+      ],
+      "managed_fields_sha256": "109db12ed9950c2026d63ce6803541cfbb14df1072184353049cb593ac24eae2",
+      "override_fields_sha256": {
+        "model": "c4b5a917552265e5fafafe6cbd4330942045da42e40c70738fe20719b3c8b3d7",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "71c8e87e8005ce93383ba6bdf44cdc9cc6b3299d1642091a0f5a2cc093f48319"
+    },
+    "product-agent": {
+      "installed_sha256": "1fe1b9029bef23ccf46d749648b12c36c1a84898298840220eb230aa7d390501",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "0e309872e1587c0abfe52f419e5590cddd98aec4d5e586e77a92f9d8fb0bfe1c",
+      "override_fields_sha256": {
+        "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "1fe1b9029bef23ccf46d749648b12c36c1a84898298840220eb230aa7d390501"
+    },
+    "reviewer-agent": {
+      "installed_sha256": "d3427946d4381f8b9c340f75f1c08f4b350aab9a862a4326a35494767e2f5725",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "de1c95cffeca28ef963ea4c1f16874ad20e86b147950e6b43f95e44e72a9d48c",
+      "override_fields_sha256": {
+        "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
+        "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
+      },
+      "template_sha256": "d3427946d4381f8b9c340f75f1c08f4b350aab9a862a4326a35494767e2f5725"
+    },
+    "scout": {
+      "installed_sha256": "006152fca7b030dda4ec3ee15cdeda3d024bfe997e59b28d6c9700cd6168ea7f",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions",
+        "sandbox_mode"
+      ],
+      "managed_fields_sha256": "86b960fc4bb1503668bc9c338a92c69516c7d0fd0a303f665c586ae09f3724ed",
+      "override_fields_sha256": {
+        "model": "c4b5a917552265e5fafafe6cbd4330942045da42e40c70738fe20719b3c8b3d7",
+        "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
+      },
+      "template_sha256": "006152fca7b030dda4ec3ee15cdeda3d024bfe997e59b28d6c9700cd6168ea7f"
+    },
+    "test-runner": {
+      "installed_sha256": "e8475175d6d0da653d919378dfb8d23bb9b9e8e2368360777e6a352576e3e91a",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions"
+      ],
+      "managed_fields_sha256": "f8e668366fbc3fbb8a99cb0e984c918fec9dde34e2246fd0ae47178381aa27b7",
+      "override_fields_sha256": {
+        "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
+        "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
+      },
+      "template_sha256": "e8475175d6d0da653d919378dfb8d23bb9b9e8e2368360777e6a352576e3e91a"
+    },
+    "tester": {
+      "installed_sha256": "1024a389e24dca8804d88cacc2d2ff6f695d60a21593454394c4bfbfc5347a31",
+      "local_overrides": {},
+      "locally_modified": false,
+      "managed_fields": [
+        "name",
+        "description",
+        "developer_instructions"
+      ],
+      "managed_fields_sha256": "78296f85735cf6556600fa08e3743c42044f4a0ce0ae10113ed1a273b8e77b84",
+      "override_fields_sha256": {
+        "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
+        "model_reasoning_effort": "b57c4299afe3cda154124bdb96ceaf618a9d8d9cd8d2c8f6580ff26faa5fe5ca"
+      },
+      "template_sha256": "1024a389e24dca8804d88cacc2d2ff6f695d60a21593454394c4bfbfc5347a31"
+    }
+  },
+  "plugin_version": "0.16.1",
+  "project_schema_version": 1,
+  "state_version": 1,
+  "sync_commit_id": "fd1ff977878947d39a036dacb9611ff6",
+  "synced_at": "2026-10-05T19:11:16.921+00:00"
+}
