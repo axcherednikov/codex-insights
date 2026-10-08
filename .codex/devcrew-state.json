@@ -1,5 +1,5 @@
 {
-  "git_base_commit": "8d0782918ae68536317676fad41380c98763de8c",
+  "git_base_commit": "67b6774d0fd6470ea4737fa1a3d2d87e870f44b1",
   "managed_roles": {
     "api-analyst": {
       "installed_sha256": "7e772115c4c575fefff89fb6bc210d74087490e0cdcb98551456faeba9da8e77",
@@ -53,7 +53,7 @@
       "template_sha256": "a968281a85346462c2d99c000cb577a1d5b9692ac2b89be6fc75bc5610f945c0"
     },
     "decision-agent": {
-      "installed_sha256": "a8d3d2a708f7d749ee1691eb0a319b9647cc0134c4d108bba16daa9357975e52",
+      "installed_sha256": "544cb9336293598e608d87cbb19acefaf40431b64ec57a2a0f904ee75334700d",
       "local_overrides": {},
       "locally_modified": false,
       "managed_fields": [
@@ -62,12 +62,12 @@
         "developer_instructions",
         "sandbox_mode"
       ],
-      "managed_fields_sha256": "c89a0e72a1f73209e49c6401e492704abd33b1234774d25e58bc058a95ff1606",
+      "managed_fields_sha256": "e6fd08fdcb2a9ec989d22062133e89a20e054c1a4e87bee351de5adec317a091",
       "override_fields_sha256": {
         "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
         "model_reasoning_effort": "60d4c90eee5e731df8d3ef2891de541d2e755ff8ee9db358e26bdec49f6e0db9"
       },
-      "template_sha256": "a8d3d2a708f7d749ee1691eb0a319b9647cc0134c4d108bba16daa9357975e52"
+      "template_sha256": "544cb9336293598e608d87cbb19acefaf40431b64ec57a2a0f904ee75334700d"
     },
     "doc-digest": {
       "installed_sha256": "f4493a3160ab06e958d3bb5024cdf6d7df28ffa5bb5a800d4bcae434d2af62a4",
@@ -136,7 +136,7 @@
       "template_sha256": "1fe1b9029bef23ccf46d749648b12c36c1a84898298840220eb230aa7d390501"
     },
     "reviewer-agent": {
-      "installed_sha256": "d3427946d4381f8b9c340f75f1c08f4b350aab9a862a4326a35494767e2f5725",
+      "installed_sha256": "e1f1e98835ad5b2c7c7ec84f1aecb38298ee3c38d49af490c81a04a7b7c286f9",
       "local_overrides": {},
       "locally_modified": false,
       "managed_fields": [
@@ -145,12 +145,12 @@
         "developer_instructions",
         "sandbox_mode"
       ],
-      "managed_fields_sha256": "de1c95cffeca28ef963ea4c1f16874ad20e86b147950e6b43f95e44e72a9d48c",
+      "managed_fields_sha256": "19027db8c06ab54205bf2de85af27bade9503a5139aa86f4d1aefd2b27527441",
       "override_fields_sha256": {
         "model": "2da8faee9a3ed7401be88eab08f9f50de122763b54cdce94dced4c0d06e0ee4f",
         "model_reasoning_effort": "364bb7082249ee9fbc5247ee49735c4246f271b82c2745a35107ddda0d7cabcc"
       },
-      "template_sha256": "d3427946d4381f8b9c340f75f1c08f4b350aab9a862a4326a35494767e2f5725"
+      "template_sha256": "e1f1e98835ad5b2c7c7ec84f1aecb38298ee3c38d49af490c81a04a7b7c286f9"
     },
     "scout": {
       "installed_sha256": "006152fca7b030dda4ec3ee15cdeda3d024bfe997e59b28d6c9700cd6168ea7f",
@@ -202,9 +202,9 @@
       "template_sha256": "1024a389e24dca8804d88cacc2d2ff6f695d60a21593454394c4bfbfc5347a31"
     }
   },
-  "plugin_version": "0.16.1",
+  "plugin_version": "0.16.4",
   "project_schema_version": 1,
   "state_version": 1,
-  "sync_commit_id": "fd1ff977878947d39a036dacb9611ff6",
-  "synced_at": "2026-10-05T19:11:16.921+00:00"
+  "sync_commit_id": "f8926bcd44464cf4beabe739486d2d89",
+  "synced_at": "2026-10-08T15:41:09.624+00:00"
 }
