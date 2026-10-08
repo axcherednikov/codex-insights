@@ -67,6 +67,9 @@ func baseTranslation(key string) (string, string, bool) {
 }
 
 func lookupBaseLabels(key string) (string, string, bool) {
+	if english, russian, found := lookupSubagentLabels(key); found {
+		return english, russian, true
+	}
 	if english, russian, found := lookupUsagePeriod(key); found {
 		return english, russian, true
 	}
@@ -87,6 +90,53 @@ func lookupBaseLabels(key string) (string, string, bool) {
 	}
 
 	return "", "", false
+}
+
+func lookupSubagentLabels(key string) (string, string, bool) {
+	switch key {
+	case "subagents":
+		return "Subagents", "Субагенты", true
+	case "subagents_created":
+		return "Created", "Создано", true
+	case "subagents_working_turns":
+		return "Working turns", "Рабочие ходы", true
+	case "subagents_completed":
+		return "Completed", "Завершено", true
+	case "subagents_aborted":
+		return "Aborted", "Прервано", true
+	case "subagents_incomplete":
+		return "Incomplete", "Не завершено", true
+	case "subagents_nested":
+		return "Nested created", "Вложенные созданные", true
+	case "subagents_roles":
+		return "Roles", "Роли", true
+	case "subagents_created_short":
+		return "created", "создано", true
+	case "subagents_working_short":
+		return "working turns", "рабочие ходы", true
+	case "subagents_settings":
+		return "Observed model / effort settings", "Наблюдавшиеся модель / глубина", true
+	case "subagents_setting_note":
+		return "a turn may appear in multiple settings", "один ход может учитываться в нескольких настройках", true
+	case "subagents_unattributed":
+		return "Forked starts excluded for missing ownership", "Ходы форка исключены: нет данных о владельце", true
+	case "subagents_missing_ids":
+		return "Files missing child identity", "Файлы без идентификатора дочернего потока", true
+	case "subagents_missing_parents":
+		return "Agents missing parent", "Агенты без родителя", true
+	case "subagents_missing_depth":
+		return "Agents missing logged depth", "Агенты без записанной глубины", true
+	case "subagents_uncertain":
+		return "Conflicting or invalid records", "Противоречивые или некорректные записи", true
+	case "subagents_read_errors":
+		return "Subagent read errors", "Ошибки чтения субагентов", true
+	case "subagents_malformed":
+		return "Malformed or invalid records", "Некорректные записи", true
+	case "subagents_terminal_mismatches":
+		return "Terminal events without matching starts", "Завершающие события без начала хода", true
+	default:
+		return "", "", false
+	}
 }
 
 func lookupReportLabels(key string) (string, string, bool) {
