@@ -85,6 +85,8 @@ type htmlReportView struct {
 	RecommendationsList  []htmlRecommendation
 	RecommendationsEmpty string
 	MethodologyItems     []string
+	SubagentTitle        string
+	SubagentLines        []string
 }
 
 type htmlMetric struct {
@@ -373,6 +375,8 @@ func buildHTMLReportView(input HTMLReportInput, copy htmlCopy) htmlReportView {
 		Insufficient: insufficient, InsufficientTitle: copy.insufficientTitle, InsufficientBody: copy.insufficientBody, InsufficientNext: copy.insufficientNext,
 		Metrics: metrics, StrengthItems: strengths, GrowthItems: growth, RecommendationsList: recommendations, RecommendationsEmpty: copy.recommendationsEmpty,
 		MethodologyItems: []string{copy.methodologyOne, copy.methodologyTwo, copy.methodologyThree},
+		SubagentTitle:    input.Translator.T("subagent_effectiveness"),
+		SubagentLines:    subagentEffectivenessLines(input.Translator, input.Effectiveness.SubagentDetails),
 	}
 }
 
@@ -576,6 +580,7 @@ footer { color:var(--muted); font-size:.9rem; padding:4px 4px 0; }
 <div class="two-col"><section aria-labelledby="strengths"><h2 id="strengths">{{.Strengths}}</h2><ul>{{range .StrengthItems}}<li>{{.}}</li>{{end}}</ul></section>
 <section aria-labelledby="growth"><h2 id="growth">{{.GrowthAreas}}</h2><ul>{{range .GrowthItems}}<li>{{.}}</li>{{end}}</ul></section></div>
 <section aria-labelledby="recommendations"><h2 id="recommendations">{{.Recommendations}}</h2>{{if .RecommendationsList}}{{range .RecommendationsList}}<article class="recommendation"><span class="priority">{{.Priority}}</span><h3>{{.Title}}</h3><p><span class="label">{{$.ObservedLabel}}</span> — {{.Observed}}</p><p><span class="label">{{$.WhyLabel}}</span> — {{.Why}}</p><p><span class="label">{{$.ActionLabel}}</span> — {{.Action}}</p><div class="example"><strong>{{$.ExampleLabel}}</strong><p><b>{{.BeforeLabel}}:</b> {{.Before}}</p><p><b>{{.AfterLabel}}:</b> {{.After}}</p></div><p class="label">{{$.ChecklistLabel}}</p><ul>{{range .Checklist}}<li>{{.}}</li>{{end}}</ul></article>{{end}}{{else}}<p>{{.RecommendationsEmpty}}</p>{{end}}</section>
+{{if .SubagentLines}}<section aria-labelledby="subagents"><h2 id="subagents">{{.SubagentTitle}}</h2><ul>{{range .SubagentLines}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
 <section aria-labelledby="methodology"><h2 id="methodology">{{.Methodology}}</h2><ul>{{range .MethodologyItems}}<li>{{.}}</li>{{end}}</ul><footer>{{.Privacy}}</footer></section>
 </main>
 </body>

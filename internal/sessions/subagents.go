@@ -32,6 +32,7 @@ type SubagentTurn struct {
 	UsageRecords      []SubagentUsageRecord
 	TokenCounts       []SubagentTokenCount
 	CounterAmbiguous  bool
+	ToolCalls         []SubagentToolCall
 }
 
 type SubagentTerminal struct {
@@ -39,7 +40,9 @@ type SubagentTerminal struct {
 	DurationMS        *int64
 	InvalidDuration   bool
 }
-type SubagentSetting struct{ Timestamp, Model, Effort string }
+type SubagentSetting struct{ Timestamp, Model, Effort, RootTurnID string }
+
+type SubagentToolCall struct{ ID, Timestamp string }
 
 // ReadSubagentMeta reads only rollout metadata and classifies solely on the logged spawn structure.
 func ReadSubagentMeta(path string) (SubagentMeta, bool, error) {
@@ -155,6 +158,8 @@ func (p *subagentTurnParser) parseLine(line []byte) {
 		p.parseContext(rec.Payload, rec.Timestamp)
 	case "token_usage_record":
 		p.parseUsage(rec.Payload, rec.Timestamp)
+	case "response_item":
+		p.parseToolCall(rec.Payload, rec.Timestamp)
 	case "compacted":
 		p.lastCounter = nil
 	}
@@ -281,9 +286,10 @@ func (p *subagentTurnParser) complete(event subagentEventPayload, at time.Time, 
 
 func (p *subagentTurnParser) parseContext(data json.RawMessage, timestamp string) {
 	var context struct {
-		TurnID string `json:"turn_id"`
-		Model  string `json:"model"`
-		Effort string `json:"effort"`
+		TurnID     string `json:"turn_id"`
+		Model      string `json:"model"`
+		Effort     string `json:"effort"`
+		RootTurnID string `json:"root_turn_id"`
 	}
 	if json.Unmarshal(data, &context) != nil || context.TurnID == "" {
 		p.malformed++
@@ -291,7 +297,7 @@ func (p *subagentTurnParser) parseContext(data json.RawMessage, timestamp string
 		return
 	}
 	turn := p.turns[context.TurnID]
-	turn.Settings = append(turn.Settings, SubagentSetting{Timestamp: timestamp, Model: context.Model, Effort: context.Effort})
+	turn.Settings = append(turn.Settings, SubagentSetting{Timestamp: timestamp, Model: context.Model, Effort: context.Effort, RootTurnID: context.RootTurnID})
 	p.turns[context.TurnID] = turn
 }
 
@@ -300,6 +306,7 @@ func (p *subagentTurnParser) parseUsage(data json.RawMessage, timestamp string) 
 		ThreadID   string          `json:"thread_id"`
 		TurnID     string          `json:"turn_id"`
 		ResponseID string          `json:"response_id"`
+		RootTurnID string          `json:"root_turn_id"`
 		Usage      json.RawMessage `json:"usage"`
 	}
 	if json.Unmarshal(data, &record) != nil || record.TurnID == "" {
@@ -313,11 +320,24 @@ func (p *subagentTurnParser) parseUsage(data json.RawMessage, timestamp string) 
 		usageValue = &usage
 	}
 	turn := p.turns[record.TurnID]
-	turn.UsageRecords = append(turn.UsageRecords, SubagentUsageRecord{ThreadID: record.ThreadID, ResponseID: record.ResponseID, Timestamp: timestamp, Usage: usageValue})
+	turn.UsageRecords = append(turn.UsageRecords, SubagentUsageRecord{ThreadID: record.ThreadID, ResponseID: record.ResponseID, Timestamp: timestamp, Usage: usageValue, RootTurnID: record.RootTurnID})
 	p.turns[record.TurnID] = turn
 	if p.forked {
 		p.recordOwnership(record.TurnID, record.ThreadID == p.childID)
 	}
+}
+
+func (p *subagentTurnParser) parseToolCall(data json.RawMessage, timestamp string) {
+	var item struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+	}
+	if p.currentID == "" || json.Unmarshal(data, &item) != nil || !isToolCall(item.Type) {
+		return
+	}
+	turn := p.turns[p.currentID]
+	turn.ToolCalls = append(turn.ToolCalls, SubagentToolCall{ID: item.CallID, Timestamp: timestamp})
+	p.turns[p.currentID] = turn
 }
 
 func (p *subagentTurnParser) recordOwnership(id string, owned bool) {

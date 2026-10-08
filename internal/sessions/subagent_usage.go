@@ -13,8 +13,8 @@ type SubagentTokenUsage struct {
 }
 
 type SubagentUsageRecord struct {
-	ThreadID, ResponseID, Timestamp string
-	Usage                           *SubagentTokenUsage
+	ThreadID, ResponseID, Timestamp, RootTurnID string
+	Usage                                       *SubagentTokenUsage
 }
 
 type SubagentTokenCount struct {

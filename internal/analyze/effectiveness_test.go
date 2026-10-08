@@ -1,10 +1,107 @@
 package analyze
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/axcherednikov/codex-insights/internal/sessions"
 )
+
+func TestSubagentEvidencePreservesUserPopulationAndSeparatesResources(t *testing.T) {
+	turns := []sessions.Turn{
+		{ID: "one", Status: "complete", Tokens: 100, DurationMS: 3000, ToolCalls: 2},
+		{ID: "two", Status: "complete", Tokens: 200, DurationMS: 6000, ToolCalls: 4},
+		{ID: "one", Status: "complete", Tokens: 100}, // duplicate user turn
+		{ID: "no-followup", Status: "complete"},
+		{ID: "aborted", Status: "aborted"},
+	}
+	types := []TaskTypeResult{{TurnID: "one", Type: "bugfix"}, {TurnID: "two", Type: "research"}}
+	labels := []SteeringResult{{PreviousTurnID: "one", Label: "steering"}, {PreviousTurnID: "two", Label: "continuation"}, {PreviousTurnID: "aborted", Label: "steering"}}
+	resources := EffectivenessResources{
+		RecordedTokens: ResourceMetric{Total: 110, KnownTurns: 1},
+		Seconds:        ResourceMetric{Total: 5, KnownTurns: 1},
+		Tools:          ResourceMetric{Total: 2, KnownTurns: 1},
+	}
+	evidence := SubagentEvidence{Tasks: map[string]SubagentTaskEvidence{
+		"one": {AgentTurns: 2, Parent: EffectivenessResources{RecordedTokens: ResourceMetric{Total: 30, KnownTurns: 1}, Seconds: ResourceMetric{Total: 3, KnownTurns: 1}},
+			Agents:   EffectivenessResources{RecordedTokens: ResourceMetric{Total: 220, KnownTurns: 2}, Seconds: ResourceMetric{Total: 10, KnownTurns: 2}},
+			Profiles: []SubagentProfileEvidence{{Dimension: "role", Name: "reviewer", Resources: resources}, {Dimension: "role", Name: "reviewer", Resources: resources}, {Dimension: "model", Name: "actual", Resources: resources}}},
+		"two":         {Parent: EffectivenessResources{EstimatedTokens: ResourceMetric{Total: 200, KnownTurns: 1}, Seconds: ResourceMetric{MissingTurns: 1}}},
+		"no-followup": {AgentTurns: 1}, "aborted": {AgentTurns: 1}, "child-not-user": {AgentTurns: 1},
+	}, LinkedTurns: 5, UnlinkedTurns: 2, ExcludedTurns: 1}
+	old := AggregateEffectiveness(turns, types, labels)
+	got := AggregateEffectiveness(turns, types, labels, evidence)
+	if !reflect.DeepEqual(old.Overall, got.Overall) || !reflect.DeepEqual(old.TaskTypeStats, got.TaskTypeStats) || !reflect.DeepEqual(old.ModelComparisons, got.ModelComparisons) || got.Observed != 2 {
+		t.Fatalf("legacy user population changed: %#v", got)
+	}
+	if old.SubagentDetails != nil || got.SubagentDetails.LinkedTurns != 5 || len(got.SubagentDetails.Profiles) != 2 {
+		t.Fatalf("details or profile groups = %#v", got.SubagentDetails)
+	}
+	for _, profile := range got.SubagentDetails.Profiles {
+		if profile.Stats.Samples != 1 || profile.Stats.Steering != 1 || profile.TaskType != "bugfix" {
+			t.Fatalf("child turns counted as tasks: %#v", profile)
+		}
+		if profile.Dimension == "role" && (profile.Agents.RecordedTokens.Average() != 220 || profile.Agents.RecordedTokens.Tasks != 1) {
+			t.Fatalf("repeated role turns not summed once per task: %#v", profile)
+		}
+	}
+	for _, cohort := range got.SubagentDetails.Cohorts {
+		if cohort.TaskType != "" {
+			continue
+		}
+		if cohort.UsesSubagents {
+			if cohort.Stats.Samples != 1 || cohort.Parent.RecordedTokens.Average() != 30 || cohort.Parent.Seconds.Average() != 3 || cohort.Agents.Seconds.Average() != 10 {
+				t.Fatalf("parent and child totals mixed: %#v", cohort)
+			}
+		} else if cohort.Parent.RecordedTokens.Tasks != 0 || cohort.Parent.EstimatedTokens.Average() != 200 || cohort.Parent.Seconds.Tasks != 0 || cohort.Parent.Seconds.MissingTurns != 1 {
+			t.Fatalf("missing metrics treated as zeros or token sources mixed: %#v", cohort)
+		}
+	}
+}
+
+func TestSubagentResourceAveragesUseKnownTaskDenominators(t *testing.T) {
+	turns := []sessions.Turn{{ID: "one", Status: "complete", UsesSubagents: true}, {ID: "two", Status: "complete", UsesSubagents: true}}
+	labels := []SteeringResult{{PreviousTurnID: "one", Label: "question"}, {PreviousTurnID: "two", Label: "user_correction"}}
+	evidence := SubagentEvidence{Tasks: map[string]SubagentTaskEvidence{
+		"one": {Agents: EffectivenessResources{RecordedTokens: ResourceMetric{Total: 100, KnownTurns: 1, MissingTurns: 1}, CounterMismatches: 1}},
+		"two": {Agents: EffectivenessResources{RecordedTokens: ResourceMetric{MissingTurns: 1}, EstimatedTokens: ResourceMetric{Total: 300, KnownTurns: 1}}},
+	}}
+	got := AggregateEffectiveness(turns, nil, labels, evidence)
+	for _, cohort := range got.SubagentDetails.Cohorts {
+		if cohort.TaskType == "" && cohort.UsesSubagents {
+			if cohort.Stats.Samples != 2 || cohort.Stats.Steering != 0 || cohort.Agents.RecordedTokens.Average() != 100 || cohort.Agents.RecordedTokens.Tasks != 1 || cohort.Agents.EstimatedTokens.Average() != 300 || cohort.Agents.RecordedTokens.MissingTurns != 2 || cohort.Agents.CounterMismatches != 1 {
+				t.Fatalf("source averages or coverage: %#v", cohort)
+			}
+		}
+	}
+}
+
+func TestSubagentRoutingStrataKeepTaskTypeModelAndEffortSeparate(t *testing.T) {
+	turns := []sessions.Turn{
+		{ID: "one", Status: "complete", Model: "same", Effort: "high", UsesSubagents: true},
+		{ID: "two", Status: "complete", Model: "same", Effort: "high"},
+		{ID: "three", Status: "complete", Model: "same", Effort: "low"},
+		{ID: "unknown", Status: "complete"},
+	}
+	labels := []SteeringResult{}
+	types := []TaskTypeResult{}
+	for _, turn := range turns {
+		labels = append(labels, SteeringResult{PreviousTurnID: turn.ID, Label: "continuation"})
+		types = append(types, TaskTypeResult{TurnID: turn.ID, Type: "bugfix"})
+	}
+	got := AggregateEffectiveness(turns, types, labels, SubagentEvidence{})
+	if len(got.SubagentDetails.RoutingCohorts) != 4 {
+		t.Fatalf("strata: %#v", got.SubagentDetails.RoutingCohorts)
+	}
+	for _, cohort := range got.SubagentDetails.RoutingCohorts {
+		if cohort.Name == "same / high" && cohort.Stats.Samples != 1 {
+			t.Fatalf("routing samples combined: %#v", cohort)
+		}
+		if cohort.Name == "same / low" && cohort.UsesSubagents && cohort.Stats.Samples != 0 {
+			t.Fatal("low effort counted as high")
+		}
+	}
+}
 
 func TestAggregateEffectivenessJoinsCompletedPriorTurnsAndAverages(t *testing.T) {
 	var turns []sessions.Turn

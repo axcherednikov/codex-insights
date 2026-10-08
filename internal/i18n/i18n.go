@@ -228,6 +228,9 @@ func lookupSubagentActivityCoverage(key string) (string, string, bool) {
 }
 
 func lookupReportLabels(key string) (string, string, bool) {
+	if english, russian, found := lookupSubagentEffectiveness(key); found {
+		return english, russian, true
+	}
 	if english, russian, found := lookupSemanticTiming(key); found {
 		return english, russian, true
 	}

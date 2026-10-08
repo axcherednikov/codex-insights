@@ -35,6 +35,13 @@ func printEffectiveness(tr i18n.Translator, analysis analyze.EffectivenessAnalys
 
 	fmt.Println()
 	printConsoleSection(tr.T("subagent_effectiveness"))
+	if analysis.SubagentDetails != nil {
+		for _, line := range subagentEffectivenessLines(tr, analysis.SubagentDetails) {
+			fmt.Printf("  %s\n", line)
+		}
+
+		return
+	}
 	if len(analysis.SubagentGlobal) == 0 {
 		fmt.Printf("  %s\n", tr.T("effectiveness_insufficient"))
 	} else {

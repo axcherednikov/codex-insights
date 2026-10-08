@@ -45,6 +45,8 @@ type observedTurn struct {
 	tokenCounts                             []sessions.SubagentTokenCount
 	settingHistory                          []sessions.SubagentSetting
 	counterAmbiguous                        bool
+	toolCalls                               []sessions.SubagentToolCall
+	ownershipRequired                       bool
 }
 
 func collectQuickSubagents(files []string, since, before time.Time, legacyOriginator string) subagentStats {
@@ -143,6 +145,7 @@ func (out *subagentStats) readChildTurns(id string, child *observedSubagent, bef
 				turns[turnID] = turn
 			}
 			mergeSubagentTurn(turn, fact)
+			turn.ownershipRequired = turn.ownershipRequired || observation.forked
 			recordSubagentResponseOwners(id, turnID, fact.UsageRecords, owners)
 		}
 	}
@@ -161,6 +164,7 @@ func mergeSubagentTurn(turn *observedTurn, fact sessions.SubagentTurn) {
 	turn.usageRecords = append(turn.usageRecords, fact.UsageRecords...)
 	turn.tokenCounts = append(turn.tokenCounts, fact.TokenCounts...)
 	turn.settingHistory = append(turn.settingHistory, fact.Settings...)
+	turn.toolCalls = append(turn.toolCalls, fact.ToolCalls...)
 	turn.counterAmbiguous = turn.counterAmbiguous || fact.CounterAmbiguous
 	mergeSubagentSettings(turn, fact.Settings)
 	if fact.OwnershipSeen {

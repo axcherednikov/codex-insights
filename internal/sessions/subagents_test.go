@@ -7,6 +7,32 @@ import (
 	"time"
 )
 
+func TestReadSubagentTurnsRetainsExplicitRootIdentityAndToolIDs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	data := `{"timestamp":"2026-10-01T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn"}}
+{"timestamp":"2026-10-01T00:00:02Z","type":"turn_context","payload":{"turn_id":"child-turn","root_turn_id":"user-turn","model":"actual","effort":"high"}}
+{"timestamp":"2026-10-01T00:00:03Z","type":"response_item","payload":{"type":"function_call","call_id":"tool-1"}}
+{"timestamp":"2026-10-01T00:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"tool-1"}}
+{"timestamp":"2026-10-01T00:00:05Z","type":"token_usage_record","payload":{"thread_id":"child","turn_id":"child-turn","root_turn_id":"user-turn","response_id":"response","usage":{"total_tokens":10}}}
+{"timestamp":"2026-10-01T00:00:06Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"after-cutoff"}}
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := time.Parse(time.RFC3339, "2026-10-01T00:00:05Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turns, malformed, err := ReadSubagentTurns(path, "child", before, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := turns["child-turn"]
+	if malformed != 0 || !turn.Owned || len(turn.Settings) != 1 || turn.Settings[0].RootTurnID != "user-turn" || len(turn.UsageRecords) != 1 || turn.UsageRecords[0].RootTurnID != "user-turn" || len(turn.ToolCalls) != 1 || turn.ToolCalls[0].ID != "tool-1" {
+		t.Fatalf("lost root or tool identity: %#v", turn)
+	}
+}
+
 func TestReadSubagentMetaRequiresLoggedThreadSpawn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	data := `{"timestamp":"2026-10-01T00:00:00Z","type":"session_meta","payload":{"id":"child","thread_source":"subagent","forked_from_id":"old","source":{"subagent":{"thread_spawn":{"id":"child","parent_thread_id":"parent","depth":2,"agent_role":"default"}}}}}`
