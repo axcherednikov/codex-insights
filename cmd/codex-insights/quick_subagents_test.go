@@ -338,3 +338,20 @@ func captureOutput(t *testing.T, fn func()) string {
 	_ = r.Close()
 	return string(data)
 }
+
+func TestQuickSubagentsReportRecordedTokensAndWorkingTime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-usage.jsonl")
+	writeJSONL(t, path,
+		sessionMeta("child", "2026-10-01T00:00:00Z", "subagent", &spawn{ID: "child", Parent: "root", Depth: 1, Role: "custom"}, "", "", ""),
+		event("2026-10-01T00:00:01Z", "task_started", "turn", nil),
+		makeSubagentContext("2026-10-01T00:00:02Z", "turn", "actual-model", "high"),
+		record("2026-10-01T00:00:03Z", "token_usage_record", map[string]any{"thread_id": "child", "turn_id": "turn", "response_id": "response", "usage": map[string]any{"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 10, "reasoning_output_tokens": 4, "total_tokens": 110}}),
+		event("2026-10-01T00:00:04Z", "task_complete", "turn", map[string]any{"duration_ms": 3000}),
+	)
+	stats := collectQuickSubagents([]string{path}, time.Time{}, time.Time{}, "")
+	tr, _ := i18n.New("en")
+	output := captureOutput(t, func() { printQuickSubagents(tr, stats) })
+	if !strings.Contains(output, "token_usage_record") || !strings.Contains(output, "Recorded working time") {
+		t.Fatalf("missing recorded resource statistics: %s", output)
+	}
+}

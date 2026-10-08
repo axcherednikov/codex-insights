@@ -225,6 +225,9 @@ func TestSubagentReportLabelsAreLocalized(t *testing.T) {
 		key, want string
 	}{
 		{English, "subagents", "Subagents"},
+		{English, "subagent_recorded_tokens", "Tokens (token_usage_record)"},
+		{Russian, "subagent_estimated_tokens", "Оценка токенов (token_count)"},
+		{Russian, "subagent_working_time", "Записанное рабочее время"},
 		{Russian, "subagents", "Субагенты"},
 		{English, "subagents_unattributed", "Forked starts excluded for missing ownership"},
 		{Russian, "subagents_unattributed", "Ходы форка исключены: нет данных о владельце"},

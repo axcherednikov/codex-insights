@@ -93,6 +93,87 @@ func lookupBaseLabels(key string) (string, string, bool) {
 }
 
 func lookupSubagentLabels(key string) (string, string, bool) {
+	if english, russian, found := lookupSubagentResourceLabels(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupSubagentTokenComponents(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupSubagentResourceCoverage(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupSubagentActivityLabels(key); found {
+		return english, russian, true
+	}
+	if english, russian, found := lookupSubagentActivityCoverage(key); found {
+		return english, russian, true
+	}
+
+	return "", "", false
+}
+
+func lookupSubagentResourceLabels(key string) (string, string, bool) {
+	switch key {
+	case "subagent_resource_unknown":
+		return "n/a", "н/д", true
+	case "subagent_resource_overflow":
+		return "A resource sum exceeds the supported integer range and is unavailable.", "Сумма расхода превышает поддерживаемый диапазон чисел и недоступна.", true
+	case "subagent_recorded_tokens":
+		return "Tokens (token_usage_record)", "Токены (token_usage_record)", true
+	case "subagent_estimated_tokens":
+		return "Estimated tokens (token_count)", "Оценка токенов (token_count)", true
+	case "subagent_token_subsets_note":
+		return "Cached input is included in input; reasoning is included in output. Sources are shown separately and totals cover confirmed data only; n/a means missing or unconfirmed data.", "Кешированные входят во входные; reasoning — в выходные. Источники показаны отдельно, суммы включают только подтверждённые данные; н/д — отсутствующие или неподтверждённые данные.", true
+	case "subagent_tokens_by_role":
+		return "Tokens by logged role", "Токены по записанным ролям", true
+	case "subagent_tokens_by_model":
+		return "Tokens by observed model (unknown = attribution unavailable)", "Токены по фактическим моделям (unknown — принадлежность не подтверждена)", true
+	case "subagent_working_time":
+		return "Recorded working time", "Записанное рабочее время", true
+	case "subagent_working_time_note":
+		return "Sum of recorded agent turn durations, including parallel work; not elapsed time of the user task.", "Сумма записанных длительностей ходов агентов, включая параллельную работу; не длительность пользовательской задачи.", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupSubagentTokenComponents(key string) (string, string, bool) {
+	switch key {
+	case "subagent_input_tokens":
+		return "input", "входные", true
+	case "subagent_cached_tokens":
+		return "including cached input", "из них кешированные", true
+	case "subagent_output_tokens":
+		return "output", "выходные", true
+	case "subagent_reasoning_tokens":
+		return "including reasoning output", "из них reasoning", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupSubagentResourceCoverage(key string) (string, string, bool) {
+	switch key {
+	case "subagent_missing_tokens":
+		return "Turns without attributable token data", "Ходы без подтверждённых данных о токенах", true
+	case "subagent_invalid_tokens":
+		return "Unusable or conflicting request records", "Непригодные или противоречивые записи расхода", true
+	case "subagent_invalid_counters":
+		return "Turns with ambiguous, invalid or reset token_count counters", "Ходы с неоднозначными, некорректными или сброшенными token_count", true
+	case "subagent_counter_mismatches":
+		return "Turns where sources disagree (token_usage_record preferred)", "Ходы с расхождением источников (приоритет token_usage_record)", true
+	case "subagent_unverifiable_counters":
+		return "Recorded turns without comparable token_count", "Ходы с записанным расходом без сопоставимого token_count", true
+	case "subagent_missing_time":
+		return "Turns without recorded duration", "Ходы без записанной длительности", true
+	case "subagent_invalid_time":
+		return "Turns with invalid or conflicting duration", "Ходы с некорректной или противоречивой длительностью", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupSubagentActivityLabels(key string) (string, string, bool) {
 	switch key {
 	case "subagents":
 		return "Subagents", "Субагенты", true
@@ -114,6 +195,13 @@ func lookupSubagentLabels(key string) (string, string, bool) {
 		return "created", "создано", true
 	case "subagents_working_short":
 		return "working turns", "рабочие ходы", true
+	default:
+		return "", "", false
+	}
+}
+
+func lookupSubagentActivityCoverage(key string) (string, string, bool) {
+	switch key {
 	case "subagents_settings":
 		return "Observed model / effort settings", "Наблюдавшиеся модель / глубина", true
 	case "subagents_setting_note":
