@@ -52,6 +52,7 @@ type EffectivenessAnalysis struct {
 	SubagentGlobal     []SubagentEffectiveness
 	SubagentByTaskType []SubagentTaskTypeEffectiveness
 	Observed           int
+	SubagentDetails    *SubagentEffectivenessDetails
 }
 
 type effectivenessObservation struct {
@@ -73,8 +74,14 @@ func AggregateEffectiveness(
 	turns []sessions.Turn,
 	taskTypes []TaskTypeResult,
 	steeringResults []SteeringResult,
+	evidence ...SubagentEvidence,
 ) EffectivenessAnalysis {
 	observations := collectEffectivenessObservations(turns, taskTypes, steeringResults)
+	if len(evidence) > 0 {
+		for i := range observations {
+			observations[i].usesSubagents = observations[i].usesSubagents || evidence[0].Tasks[observations[i].turnID].AgentTurns > 0
+		}
+	}
 	taskTypeGroups, modelGroups := groupEffectivenessObservations(observations)
 	analysis := EffectivenessAnalysis{
 		Overall:            summarizeEffectiveness(observations),
@@ -84,9 +91,181 @@ func AggregateEffectiveness(
 		SubagentGlobal:     globalSubagentEffectiveness(observations),
 		SubagentByTaskType: taskTypeSubagentEffectiveness(observations),
 	}
+	if len(evidence) > 0 {
+		analysis.SubagentDetails = summarizeSubagentEvidence(observations, evidence[0])
+	}
 	sortEffectiveness(&analysis)
 
 	return analysis
+}
+
+// ResourceMetric retains observed coverage. A missing value never contributes
+// a zero to an average; partial request totals remain explicitly partial.
+type ResourceMetric struct {
+	Total                           float64
+	Tasks, KnownTurns, MissingTurns int
+}
+
+func (m ResourceMetric) Average() float64 {
+	if m.Tasks == 0 {
+		return 0
+	}
+
+	return m.Total / float64(m.Tasks)
+}
+
+type EffectivenessResources struct {
+	RecordedTokens, EstimatedTokens, Seconds, Tools         ResourceMetric
+	CounterMismatches, UnverifiableCounters, InvalidRecords int
+}
+
+func (r *EffectivenessResources) Add(other EffectivenessResources) {
+	mergeEffectivenessResources(r, other, false)
+}
+
+type SubagentProfileEvidence struct {
+	Dimension, Name string
+	Resources       EffectivenessResources
+}
+
+type SubagentTaskEvidence struct {
+	Parent, Agents EffectivenessResources
+	AgentTurns     int
+	Profiles       []SubagentProfileEvidence
+}
+
+// SubagentEvidence contains only resources attributed to selected user turns.
+// Its map keys are join identities, never extra user-task observations.
+type SubagentEvidence struct {
+	Tasks                                                 map[string]SubagentTaskEvidence
+	LinkedTurns, UnlinkedTurns, ExcludedTurns, ReadErrors int
+}
+
+type SubagentCohort struct {
+	TaskType, Dimension, Name string
+	UsesSubagents             bool
+	Stats                     EffectivenessStats
+	Parent, Agents            EffectivenessResources
+}
+
+type SubagentEffectivenessDetails struct {
+	Cohorts                                               []SubagentCohort
+	Profiles                                              []SubagentCohort
+	RoutingCohorts                                        []SubagentCohort
+	LinkedTurns, UnlinkedTurns, ExcludedTurns, ReadErrors int
+}
+
+func summarizeSubagentEvidence(observations []effectivenessObservation, evidence SubagentEvidence) *SubagentEffectivenessDetails {
+	groups := map[string]*SubagentCohort{}
+	profiles := map[string]*SubagentCohort{}
+	routing := map[string]*SubagentCohort{}
+	for _, observation := range observations {
+		task := evidence.Tasks[observation.turnID]
+		for _, taskType := range []string{"", observation.taskType} {
+			evidenceCohort(groups, taskType+"\x00without", taskType, "", "", false)
+			evidenceCohort(groups, taskType+"\x00with", taskType, "", "", true)
+			key := taskType + "\x00without"
+			if observation.usesSubagents {
+				key = taskType + "\x00with"
+			}
+			cohort := evidenceCohort(groups, key, taskType, "", "", observation.usesSubagents)
+			addEvidenceObservation(cohort, observation, task.Parent, task.Agents)
+		}
+		addProfileObservations(profiles, observation, task)
+		addRoutingObservation(routing, observation, task)
+	}
+
+	return &SubagentEffectivenessDetails{
+		Cohorts: sortedEvidenceCohorts(groups), Profiles: sortedEvidenceCohorts(profiles),
+		RoutingCohorts: sortedEvidenceCohorts(routing),
+		LinkedTurns:    evidence.LinkedTurns, UnlinkedTurns: evidence.UnlinkedTurns,
+		ExcludedTurns: evidence.ExcludedTurns, ReadErrors: evidence.ReadErrors,
+	}
+}
+
+func addRoutingObservation(groups map[string]*SubagentCohort, observation effectivenessObservation, task SubagentTaskEvidence) {
+	if observation.model == "unknown" || observation.effort == "unknown" {
+		return
+	}
+	name := observation.model + " / " + observation.effort
+	baseKey := observation.taskType + "\x00" + name
+	without := evidenceCohort(groups, baseKey+"\x00without", observation.taskType, "routing", name, false)
+	with := evidenceCohort(groups, baseKey+"\x00with", observation.taskType, "routing", name, true)
+	cohort := without
+	if observation.usesSubagents {
+		cohort = with
+	}
+	addEvidenceObservation(cohort, observation, task.Parent, task.Agents)
+}
+
+func evidenceCohort(groups map[string]*SubagentCohort, key, taskType, dimension, name string, uses bool) *SubagentCohort {
+	if groups[key] == nil {
+		groups[key] = &SubagentCohort{TaskType: taskType, Dimension: dimension, Name: name, UsesSubagents: uses}
+	}
+
+	return groups[key]
+}
+
+func addProfileObservations(groups map[string]*SubagentCohort, observation effectivenessObservation, task SubagentTaskEvidence) {
+	// Multiple working turns and agents with the same profile still form one
+	// user-task sample. Different profiles overlap and are not additive cohorts.
+	resources := map[string]EffectivenessResources{}
+	identities := map[string]SubagentProfileEvidence{}
+	for _, profile := range task.Profiles {
+		if profile.Name == "" || profile.Name == "unknown" {
+			continue
+		}
+		key := profile.Dimension + "\x00" + profile.Name
+		row := resources[key]
+		mergeEffectivenessResources(&row, profile.Resources, false)
+		resources[key], identities[key] = row, profile
+	}
+	for key, resource := range resources {
+		identity := identities[key]
+		cohort := evidenceCohort(groups, observation.taskType+"\x00"+key, observation.taskType, identity.Dimension, identity.Name, true)
+		addEvidenceObservation(cohort, observation, task.Parent, resource)
+	}
+}
+
+func addEvidenceObservation(cohort *SubagentCohort, observation effectivenessObservation, parent, agents EffectivenessResources) {
+	cohort.Stats.Samples++
+	if observation.steering {
+		cohort.Stats.Steering++
+	}
+	mergeEffectivenessResources(&cohort.Parent, parent, true)
+	mergeEffectivenessResources(&cohort.Agents, agents, true)
+}
+
+func mergeEffectivenessResources(target *EffectivenessResources, source EffectivenessResources, countTask bool) {
+	pairs := [][2]*ResourceMetric{
+		{&target.RecordedTokens, &source.RecordedTokens}, {&target.EstimatedTokens, &source.EstimatedTokens},
+		{&target.Seconds, &source.Seconds}, {&target.Tools, &source.Tools},
+	}
+	for _, pair := range pairs {
+		pair[0].Total += pair[1].Total
+		pair[0].KnownTurns += pair[1].KnownTurns
+		pair[0].MissingTurns += pair[1].MissingTurns
+		if countTask && pair[1].KnownTurns > 0 {
+			pair[0].Tasks++
+		}
+	}
+	target.CounterMismatches += source.CounterMismatches
+	target.UnverifiableCounters += source.UnverifiableCounters
+	target.InvalidRecords += source.InvalidRecords
+}
+
+func sortedEvidenceCohorts(groups map[string]*SubagentCohort) []SubagentCohort {
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]SubagentCohort, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, *groups[key])
+	}
+
+	return result
 }
 
 func collectEffectivenessObservations(

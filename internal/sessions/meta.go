@@ -21,6 +21,7 @@ type SessionMeta struct {
 	ID           string `json:"id"`
 	Originator   string `json:"originator"`
 	ThreadSource string `json:"thread_source"`
+	ForkedFromID string `json:"forked_from_id"`
 	Source       any    `json:"source"`
 	StartedAt    string `json:"-"`
 }

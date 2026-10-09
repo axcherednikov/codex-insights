@@ -29,6 +29,7 @@ type quickStats struct {
 	readErrors             int
 	excludedJudgeSessions  int
 	legacyExcludedSessions int
+	subagents              subagentStats
 }
 
 func runQuick(args []string) {
@@ -113,6 +114,7 @@ func collectQuickStats(files []string, since, before time.Time, legacyOriginator
 	for _, file := range files {
 		collectQuickFile(&stats, file, since, before, legacyOriginator)
 	}
+	stats.subagents = collectQuickSubagents(files, since, before, legacyOriginator)
 
 	return stats
 }
@@ -280,4 +282,5 @@ func printQuickReport(tr i18n.Translator, days int, before time.Time, legacyOrig
 			stats.readErrors,
 		)
 	}
+	printQuickSubagents(tr, stats.subagents)
 }

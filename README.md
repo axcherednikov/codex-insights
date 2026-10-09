@@ -13,7 +13,14 @@ skills.
 ## Features
 
 - Fast, local-only usage summary with `quick`.
+- Separate subagent activity: created agents, working turns, lifecycle statuses,
+  nesting, logged roles, models, and reasoning settings.
+- Subagent token accounting by model and role, with recorded usage and legacy
+  estimates shown separately, plus summed working time.
 - Deeper Judge-backed analysis with actionable recommendations.
+- Subagent comparisons by task type, logged role and model, with sample sizes,
+  resource coverage, and explicit statistical limitations in console and HTML
+  reports.
 - English reports by default, with Russian or locale-based selection available
   through `--lang`.
 - Configurable analysis windows and session locations.
@@ -170,25 +177,64 @@ codex-insights --version
 
 ## Example output
 
-The values below are synthetic and do not contain session data:
+The examples below are synthetic. Model names and semantic labels are
+illustrative; they are not measurements of model quality or agent benefit.
 
 ```text
 Codex Insights Quick
 ====================
-Period: last 30 days — 2026-09-17T09:00:00Z
-User sessions: 42
-Tasks: 118
+Period: last 30 days — 2026-10-09T00:00:00Z
+User sessions: 1
+Tasks: 21
 
 Status:
-  Complete         112
-  Aborted            4
-  Incomplete         2
+  complete         21
 
-Completed averages:
-  Tokens:                184320
-  Duration:              96.4 s
-  Tool calls:            12.8
+Completed task averages:
+  Tokens:                1357
+  Duration:              6.0 sec
+  Tool calls:            2.0
+
+Subagents:
+  Created: 20
+  Working turns: 20
+  Completed: 20
+  Aborted: 0
+  Incomplete: 0
+  Nested created: 0
+  Roles (created / working turns):
+    reviewer: 10 / 10
+    worker: 10 / 10
+  Tokens (token_usage_record): 7400 (20 working turns)
+  Estimated tokens (token_count): n/a (0 working turns)
+  Tokens by logged role (token_usage_record / token_count):
+    reviewer: 1400 / n/a
+    worker: 6000 / n/a
+  Tokens by observed model (unknown = attribution unavailable) (token_usage_record / token_count):
+    model-b: 6000 / n/a
+    model-c: 1400 / n/a
+  Recorded working time: 60.000 sec (20 working turns)
 ```
+
+This is an excerpt: model settings, token components, and explanatory notes are
+omitted. The same synthetic data produces these `analyze` cohort headings;
+resource rows are omitted here:
+
+```text
+Subagent effectiveness:
+  All task types / With subagents — samples=10, steering=20.0%
+  All task types / No observed subagents — samples=10, steering=30.0%
+  Bug fix / With subagents — samples=10, steering=20.0%
+  Bug fix / No observed subagents — samples=10, steering=30.0%
+  Bug fix / Model model-b — samples=10, steering=20.0%
+  Bug fix / Model model-c — samples=10, steering=20.0%
+  Bug fix / Role reviewer — samples=10, steering=20.0%
+  Bug fix / Role worker — samples=10, steering=20.0%
+```
+
+Both role cohorts contain the same ten user tasks. Their percentages are not
+independent evidence about either role. See [Subagent reports](docs/subagent-reports.md)
+for the full resource rows and accounting definitions.
 
 ## Commands
 
@@ -196,6 +242,14 @@ Completed averages:
 
 Produces a local summary of sessions, tasks, completion statuses, token use,
 duration, tool calls, and model/reasoning combinations.
+
+The separate Subagents section counts unique created agents and their working
+turns, including repeat assignments and nested agents. It shows logged roles
+and execution settings, token use by model and role, and summed working time.
+Child sessions never become extra user tasks. Role names are read from Codex
+records; no plugin installation or fixed role-name list is required. Lifecycle
+statuses and working time in `quick` are totals across agents, while role rows
+show created/working counts and token use.
 
 ```text
 codex-insights quick [options]
@@ -214,6 +268,13 @@ Common options:
 
 Runs the local aggregation plus semantic classification through the Codex CLI.
 The command displays a privacy notice before its first uncached Judge call.
+
+Subagent effectiveness uses the same semantic task-type and follow-up labels as
+the existing report, without an additional Judge pass. It compares user tasks
+with and without observed subagents, then groups observations by task type,
+logged subagent role/model, and matching parent model/reasoning settings.
+Rows show sample size, user steering, and resource averages with known/missing
+coverage. Parent resources and agent resources remain separate.
 
 ```text
 codex-insights analyze [options]
@@ -234,6 +295,38 @@ aggregate counts, semantic labels, and synthetic examples only. It does not
 include prompts, answers, or session text. Report files are created with
 restrictive permissions on Unix-like systems and should still be treated as
 local analysis output.
+
+### Subagent data and comparison limits
+
+- `token_usage_record` is preferred when request identity and ownership are
+  confirmed. Repeated requests and inherited fork history are excluded.
+  `token_count` differences are a separately labelled fallback estimate; the
+  two sources are not silently added or substituted when records conflict.
+- Cached input is already included in input tokens; reasoning output is
+  already included in output tokens. Neither subset is added again. No
+  monetary cost is calculated.
+- Working time sums valid `task_complete.duration_ms` values, including
+  parallel work. It is not user-task elapsed time. In `analyze`, agent token,
+  time, and tool values are average sums per observed user task; parent elapsed
+  time is reported separately.
+- Missing values are `n/a`, not zero. Means use tasks with observed values;
+  incomplete coverage gives partial totals. Counter disagreements and
+  unverified attribution are disclosed. Older sessions remain readable, but
+  missing roles, request ownership, or `root_turn_id` limit agent comparisons.
+- Historical guardian service sessions are excluded from ordinary subagents.
+  Unknown roles are not inferred from prompts, task names, or plugin settings.
+- Comparisons use completed user tasks with an existing follow-up label.
+  No follow-up or no steering does not prove success. At least ten observations
+  per matched cohort are needed to remove the small-sample warning; this is
+  a reporting threshold, not statistical significance.
+- Task-type and parent-routing groups reduce some differences between cohorts,
+  but actual task difficulty is unavailable. Associations do not prove that
+  agents help or hurt. Role/model cohorts can overlap, and the outcome of a
+  shared task cannot be attributed to one participant.
+
+Existing user-task counts, session filtering, semantic cache format, and Judge
+methodology are retained. A history without attributable child data still
+produces the existing user report and reports the limits of agent evidence.
 
 ### Golden evaluation
 
@@ -262,7 +355,8 @@ binaries report `dev` unless a version is supplied at link time.
 ```bash
 gofmt -w path/to/changed.go
 go vet ./...
-go test ./...
+go test -count=1 ./...
+golangci-lint run ./...
 go build ./cmd/codex-insights
 ```
 

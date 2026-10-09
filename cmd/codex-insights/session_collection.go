@@ -20,6 +20,8 @@ type collectedSessions struct {
 	UserSessions           int
 	ExcludedJudgeSessions  int
 	LegacyExcludedSessions int
+	TurnSessions           map[string]string
+	SessionFiles           map[string][]string
 }
 
 // collectSessions is the single source of truth for analyze and golden export
@@ -35,7 +37,7 @@ func collectSessions(root string, window sessionWindow) (collectedSessions, erro
 }
 
 func collectSessionFiles(files []string, window sessionWindow) collectedSessions {
-	var collected collectedSessions
+	collected := collectedSessions{TurnSessions: map[string]string{}, SessionFiles: map[string][]string{}}
 	for _, file := range files {
 		meta, err := sessions.ReadMeta(file)
 		if err != nil || meta.ThreadSource != "user" {
@@ -66,13 +68,26 @@ func collectSessionFiles(files []string, window sessionWindow) collectedSessions
 			continue
 		}
 		collected.UserSessions++
+		collected.SessionFiles[meta.ID] = append(collected.SessionFiles[meta.ID], file)
 		collected.Interactions = append(collected.Interactions, filtered...)
 		turns, err := sessions.ParseTurns(file, window.Before)
 		if err == nil {
-			collected.Turns = append(collected.Turns, filterTurns(turns, window.Since, window.Before)...)
+			selected := filterTurns(turns, window.Since, window.Before)
+			collected.Turns = append(collected.Turns, selected...)
+			collected.recordTurnSessions(selected, meta.ID)
 		}
 		collected.Followups = append(collected.Followups, sessions.BuildFollowups(filtered)...)
 	}
 
 	return collected
+}
+
+func (collected *collectedSessions) recordTurnSessions(turns []sessions.Turn, sessionID string) {
+	for _, turn := range turns {
+		if previous, exists := collected.TurnSessions[turn.ID]; exists && previous != sessionID {
+			collected.TurnSessions[turn.ID] = ""
+		} else if !exists {
+			collected.TurnSessions[turn.ID] = sessionID
+		}
+	}
 }

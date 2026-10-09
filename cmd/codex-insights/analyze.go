@@ -182,6 +182,7 @@ func runAnalyze(args []string) {
 	discoveryDuration := time.Since(discoveryStarted)
 	parsingStarted := time.Now()
 	collected := collectSessionFiles(files, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: legacyExcludeOriginator})
+	subagentEvidence := collectAnalyzeSubagents(files, collected, sessionWindow{Since: since, Before: before, LegacyExcludeOriginator: legacyExcludeOriginator})
 	allInteractions := collected.Interactions
 	allTurns := collected.Turns
 	followups := collected.Followups
@@ -225,6 +226,7 @@ func runAnalyze(args []string) {
 		allTurns,
 		converted.taskTypes,
 		converted.steering,
+		subagentEvidence,
 	)
 	steeringResults := converted.steering
 	taskTypeResults := converted.taskTypes

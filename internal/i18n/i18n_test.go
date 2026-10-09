@@ -219,6 +219,25 @@ func TestCapturedDictionaryTranslations(t *testing.T) {
 	}
 }
 
+func TestSubagentReportLabelsAreLocalized(t *testing.T) {
+	for _, tc := range []struct {
+		language  Language
+		key, want string
+	}{
+		{English, "subagents", "Subagents"},
+		{English, "subagent_recorded_tokens", "Tokens (token_usage_record)"},
+		{Russian, "subagent_estimated_tokens", "Оценка токенов (token_count)"},
+		{Russian, "subagent_working_time", "Записанное рабочее время"},
+		{Russian, "subagents", "Субагенты"},
+		{English, "subagents_unattributed", "Forked starts excluded for missing ownership"},
+		{Russian, "subagents_unattributed", "Ходы форка исключены: нет данных о владельце"},
+	} {
+		if got := (Translator{Language: tc.language}).T(tc.key); got != tc.want {
+			t.Errorf("T(%q) for %q = %q, want %q", tc.key, tc.language, got, tc.want)
+		}
+	}
+}
+
 func capturedLookup(translator Translator, category, key string) string {
 	switch category {
 	case "translate":
