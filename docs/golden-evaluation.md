@@ -22,9 +22,9 @@ Bump methodology when the classification definitions or evaluation procedure
 changes; bump prompt when Judge instructions change; bump schema when the
 wire/result shape changes. Current production versions are `semantic-v2`,
 `semantic-judge-v2`, and `semantic-schema-v2`. These identities advance
-independently, although this release changes both the methodology and prompt
-versions while leaving the result schema unchanged. All three participate in
-production cache keys.
+independently. Version 0.3.0 changed the methodology and prompt while retaining
+the result schema. Subagent reporting retains these versions and reuses existing
+semantic labels. All three participate in production cache keys.
 Model and reasoning effort also intentionally invalidate cache entries;
 language does not, because labels are language-independent. The persistent
 cache stores labels and confidence values, never raw conversation text. A cold

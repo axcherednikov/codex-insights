@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-09
+
+### Added
+
+- A separate `quick` subagent report covering unique created agents, working
+  turns, completed/aborted/incomplete runs, nested creations, logged roles,
+  models, and reasoning settings. Repeated assignments remain working turns
+  of the same agent rather than extra user tasks.
+- Subagent token totals by logged role and observed model, preferring confirmed
+  `token_usage_record` requests and separately labelling legacy `token_count`
+  estimates. Cached input and reasoning output are included subsets, not
+  additional totals. Missing data and counter disagreements are disclosed.
+- Summed recorded subagent working time, including parallel execution and
+  explicitly separate from user-task elapsed time.
+- Console and HTML `analyze` comparisons for tasks with and without observed
+  subagents, by task type, subagent role/model, and matching parent execution
+  settings. Rows include user steering, token/time/tool averages, sample sizes,
+  and resource coverage using existing semantic labels.
+- Regression tests for nested and reused agents, repeated records and rollouts,
+  inherited fork history, conflicting ownership/counters, old session formats,
+  missing values, report rendering, and preservation of user-task statistics.
+- Synthetic report examples and documentation of attribution, resource
+  accounting, overlapping cohorts, and statistical limitations.
+
+### Compatibility
+
+- User-task statistics continue to include only user sessions. Historical
+  guardian service sessions are excluded from ordinary subagents, and child
+  sessions do not increase user-task counts.
+- Existing CLI flags, semantic methodology, Judge model/prompt/schema, cache
+  format, and golden workflow remain unchanged. Role analytics require no
+  plugin or role-name registry and add no semantic Judge requests.
+- Old histories remain readable; unavailable roles, request ownership, root
+  links, or durations reduce coverage rather than inventing attribution.
+
+### Limitations
+
+- Resource means use observed values; partial coverage is not a complete cost
+  estimate. No monetary pricing is inferred. `quick` lifecycle statuses and
+  working time are aggregate totals, not per-role breakdowns.
+- Effectiveness is descriptive, not causal. Actual difficulty and individual
+  agent success are unavailable; no steering does not prove success. Role/model
+  cohorts overlap, and the ten-sample reporting threshold does not establish
+  statistical significance.
+
 ## [0.3.0] - 2026-10-05
 
 ### Added
@@ -107,7 +152,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kept the restrictive permission regression test meaningful on POSIX systems
   without failing on Windows, where `FileMode.Perm` does not represent ACLs.
 
-[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/axcherednikov/codex-insights/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/axcherednikov/codex-insights/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/axcherednikov/codex-insights/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/axcherednikov/codex-insights/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/axcherednikov/codex-insights/compare/v0.1.0...v0.2.0
